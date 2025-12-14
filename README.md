@@ -27,7 +27,67 @@ Cursor Extension (TypeScript) ⇄ WebSocket IPC ⇄ Unreal Engine Plugin (C++)
 
 ## Quick Start
 
-### 1. Install Unreal Engine Plugin
+### Automated Installation (Recommended for Quick Prototyping)
+
+For rapid development and testing, use the auto-install scripts to automatically install both the extension and plugin:
+
+#### Windows (PowerShell)
+```powershell
+# Install both extension and plugin
+.\install.ps1
+
+# Or specify project path directly
+.\install.ps1 -UnrealProjectPath "C:\Path\To\YourProject\YourProject.uproject"
+
+# Install only extension
+.\install.ps1 -SkipPlugin
+
+# Install only plugin
+.\install.ps1 -SkipExtension
+```
+
+#### macOS/Linux (Bash)
+```bash
+# Make script executable (first time only)
+chmod +x install.sh
+
+# Install both extension and plugin
+./install.sh
+
+# Or specify project path directly
+./install.sh --project-path "/path/to/YourProject/YourProject.uproject"
+
+# Install only extension
+./install.sh --skip-plugin
+
+# Install only plugin
+./install.sh --skip-extension
+```
+
+#### Using npm (Cross-platform)
+```bash
+# Install both (requires Node.js)
+npm run install:all
+
+# Install only extension
+npm run install:extension
+
+# Install only plugin
+npm run install:plugin
+```
+
+The scripts will:
+- Compile and package the Cursor extension
+- Install it to Cursor/VS Code automatically
+- Copy the Unreal plugin to your project's Plugins folder
+- Regenerate project files (Windows only)
+- Save your project path for future use
+
+**Note**: The first time you run the script, you'll be prompted for your Unreal project path. This path is saved to `.unreal-project-path` for future runs.
+
+### Manual Installation
+
+#### 1. Install Unreal Engine Plugin
 
 See [`unreal-plugin/README.md`](unreal-plugin/README.md) for detailed installation instructions.
 
@@ -36,9 +96,9 @@ Quick steps:
 2. Regenerate project files
 3. Open project in Unreal Editor (plugin loads automatically)
 
-### 2. Install Cursor Extension
+#### 2. Install Cursor Extension
 
-#### Development
+##### Development
 ```bash
 cd cursor-extension
 npm install
@@ -47,7 +107,7 @@ npm run compile
 
 Press F5 in Cursor to launch Extension Development Host.
 
-#### Package
+##### Package
 ```bash
 npm run package
 code --install-extension unreal-cursor-integration-0.1.0.vsix
@@ -150,6 +210,32 @@ See [`API_CONTRACT.md`](API_CONTRACT.md) for complete IPC method/event reference
 
 ## Development
 
+### Quick Prototyping Workflow
+
+For rapid iteration during development:
+
+1. **Make your changes** to extension or plugin code
+2. **Run the install script** to automatically reinstall:
+   ```bash
+   # Windows
+   .\install.ps1
+   
+   # macOS/Linux
+   ./install.sh
+   
+   # Or using npm
+   npm run install:all
+   ```
+3. **Reload Cursor/VS Code** (Ctrl+Shift+P → "Reload Window")
+4. **Restart Unreal Editor** if you modified the plugin
+
+The install script handles:
+- Compiling TypeScript
+- Packaging the extension
+- Installing to Cursor/VS Code
+- Copying plugin to your Unreal project
+- Regenerating project files (Windows)
+
 ### Extension Development
 ```bash
 cd cursor-extension
@@ -160,7 +246,7 @@ npm run watch  # Watch mode for development
 ### Plugin Development
 1. Modify C++ source files
 2. Close Unreal Editor
-3. Rebuild plugin
+3. Rebuild plugin (or run `.\install.ps1` / `./install.sh` to auto-install)
 4. Reopen project
 
 ## License

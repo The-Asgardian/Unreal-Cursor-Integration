@@ -1,0 +1,11 @@
+# User-specific config files
+.unreal-project-path
+
+# Extension build artifacts
+cursor-extension/*.vsix
+cursor-extension/out/
+cursor-extension/node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db

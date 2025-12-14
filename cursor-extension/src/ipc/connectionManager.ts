@@ -115,7 +115,8 @@ export class ConnectionManager {
             }
         };
 
-        const response = await this.client.sendRequest('client.hello', request) as ClientHelloResponse;
+        const responseMessage = await this.client.sendRequest('client.hello', request);
+        const response = responseMessage.result as ClientHelloResponse;
         
         const projectInfo: ProjectInfo = {
             engineVersion: response.engineVersion,
@@ -135,15 +136,15 @@ export class ConnectionManager {
         }
 
         // Build events
-        this.client.onEvent('build.progress', (data) => {
+        this.client.onEvent('build.progress', (_event, data: { percent: number }) => {
             this.outputChannel.appendLine(`Build progress: ${data.percent}%`);
         });
 
-        this.client.onEvent('build.outputLine', (data) => {
+        this.client.onEvent('build.outputLine', (_event, data: { line: string }) => {
             this.outputChannel.appendLine(data.line);
         });
 
-        this.client.onEvent('build.finished', (data) => {
+        this.client.onEvent('build.finished', (_event, data: { success: boolean }) => {
             this.connectionState.buildInProgress = false;
             if (data.success) {
                 this.outputChannel.appendLine('Build completed successfully');
@@ -153,13 +154,13 @@ export class ConnectionManager {
         });
 
         // Live Coding events
-        this.client.onEvent('livecoding.statusChanged', (data) => {
+        this.client.onEvent('livecoding.statusChanged', (_event, data: { enabled: boolean; compiling: boolean }) => {
             this.connectionState.liveCodingEnabled = data.enabled;
             this.connectionState.liveCodingCompiling = data.compiling;
         });
 
         // Run events
-        this.client.onEvent('run.pieStatus', (data) => {
+        this.client.onEvent('run.pieStatus', (_event, data: { running: boolean }) => {
             this.connectionState.pieRunning = data.running;
         });
 

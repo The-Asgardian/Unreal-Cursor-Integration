@@ -1,0 +1,13 @@
+{
+  "name": "unreal-cursor-integration-root",
+  "version": "0.1.0",
+  "description": "Root package for Unreal Engine Cursor Integration",
+  "private": true,
+  "scripts": {
+    "install:all": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File ./install.ps1' : 'bash ./install.sh', {stdio: 'inherit'})\"",
+    "install:extension": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File ./install.ps1 -SkipPlugin' : 'bash ./install.sh --skip-plugin', {stdio: 'inherit'})\"",
+    "install:plugin": "node -e \"require('child_process').execSync(process.platform === 'win32' ? 'powershell -ExecutionPolicy Bypass -File ./install.ps1 -SkipExtension' : 'bash ./install.sh --skip-extension', {stdio: 'inherit'})\"",
+    "install:all:windows": "powershell -ExecutionPolicy Bypass -File ./install.ps1",
+    "install:all:unix": "bash ./install.sh"
+  }
+}

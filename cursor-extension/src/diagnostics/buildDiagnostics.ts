@@ -18,8 +18,7 @@ export class BuildDiagnostics {
             if (diagnostic) {
                 const uri = vscode.Uri.file(diagnostic.file);
                 const existing = this.diagnosticCollection.get(uri) || [];
-                existing.push(diagnostic.diagnostic);
-                this.diagnosticCollection.set(uri, existing);
+                this.diagnosticCollection.set(uri, [...existing, diagnostic.diagnostic]);
             }
         }
     }

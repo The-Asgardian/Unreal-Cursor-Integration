@@ -1,4 +1,4 @@
-import * as WebSocket from 'ws';
+import WebSocket from 'ws';
 import { Message, RequestMessage, ResponseMessage, EventMessage } from './protocol';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -33,27 +33,28 @@ export class IPCClient {
             }
 
             this.shouldReconnect = true;
-            this.ws = new WebSocket(this.url);
+            const ws = new WebSocket(this.url);
+            this.ws = ws;
 
             const timeout = setTimeout(() => {
-                if (this.ws?.readyState !== WebSocket.OPEN) {
-                    this.ws?.close();
+                if (ws.readyState !== WebSocket.OPEN) {
+                    ws.close();
                     reject(new Error('Connection timeout'));
                 }
             }, this.connectionTimeout);
 
-            this.ws.on('open', () => {
+            ws.on('open', () => {
                 clearTimeout(timeout);
                 this.reconnectAttempts = 0;
                 resolve();
             });
 
-            this.ws.on('error', (error) => {
+            ws.on('error', (error: Error) => {
                 clearTimeout(timeout);
                 reject(error);
             });
 
-            this.ws.on('message', (data: WebSocket.Data) => {
+            ws.on('message', (data: WebSocket.Data) => {
                 try {
                     const message: Message = JSON.parse(data.toString());
                     this.handleMessage(message);
@@ -62,7 +63,7 @@ export class IPCClient {
                 }
             });
 
-            this.ws.on('close', () => {
+            ws.on('close', () => {
                 this.handleDisconnect();
             });
         });
