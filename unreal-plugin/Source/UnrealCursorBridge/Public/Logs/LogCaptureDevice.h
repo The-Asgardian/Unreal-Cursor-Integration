@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "HAL/OutputDevice.h"
+#include "Misc/OutputDevice.h"
 
 // Placeholder for Phase 4: Real-time Logging
 class FLogCaptureDevice : public FOutputDevice

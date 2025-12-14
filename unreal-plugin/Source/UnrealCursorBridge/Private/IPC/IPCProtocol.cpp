@@ -78,7 +78,11 @@ bool FIPCResponseMessage::FromJson(const TSharedPtr<FJsonObject>& JsonObject)
 		FError ErrorValue;
 		(*ErrorObject)->TryGetStringField(TEXT("code"), ErrorValue.Code);
 		(*ErrorObject)->TryGetStringField(TEXT("message"), ErrorValue.Message);
-		(*ErrorObject)->TryGetObjectField(TEXT("data"), ErrorValue.Data);
+		const TSharedPtr<FJsonObject>* ErrorDataObject = nullptr;
+		if ((*ErrorObject)->TryGetObjectField(TEXT("data"), ErrorDataObject))
+		{
+			ErrorValue.Data = *ErrorDataObject;
+		}
 		Error = ErrorValue;
 	}
 	

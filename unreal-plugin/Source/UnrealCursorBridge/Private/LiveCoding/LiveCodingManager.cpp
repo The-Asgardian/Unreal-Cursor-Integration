@@ -8,12 +8,12 @@ LiveCodingManager& LiveCodingManager::Get()
 	return Instance;
 }
 
-bool LiveCodingManager::GetStatus(bool& bEnabled, bool& bCompiling, FString& LastResult)
+bool LiveCodingManager::GetStatus(bool& OutEnabled, bool& OutCompiling, FString& OutLastResult)
 {
 	// Phase 3: Implement Live Coding status
-	bEnabled = this->bEnabled;
-	bCompiling = this->bCompiling;
-	LastResult = this->LastResult;
+	OutEnabled = this->bEnabled;
+	OutCompiling = this->bCompiling;
+	OutLastResult = this->LastResult;
 	return IsAvailable();
 }
 

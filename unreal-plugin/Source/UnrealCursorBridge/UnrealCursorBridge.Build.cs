@@ -4,7 +4,7 @@ using UnrealBuildTool;
 
 public class UnrealCursorBridge : ModuleRules
 {
-	public UnrealCursorBridge(ReadTargetRules Target) : base(Target)
+	public UnrealCursorBridge(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 		
@@ -25,6 +25,7 @@ public class UnrealCursorBridge : ModuleRules
 				"CoreUObject",
 				"Engine",
 				"WebSockets",
+				"WebSocketNetworking",
 				"Slate",
 				"SlateCore"
 			}

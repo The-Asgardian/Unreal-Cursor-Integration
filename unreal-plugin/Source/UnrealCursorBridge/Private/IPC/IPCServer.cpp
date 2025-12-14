@@ -2,10 +2,11 @@
 
 #include "IPC/IPCServer.h"
 #include "IWebSocketServer.h"
-#include "IWebSocket.h"
-#include "WebSocketsModule.h"
+#include "INetworkingWebSocket.h"
+#include "IWebSocketNetworkingModule.h"
+#include "WebSocketNetworkingDelegates.h"
 #include "Dom/JsonObject.h"
-#include "Dom/JsonSerializer.h"
+#include "Serialization/JsonSerializer.h"
 #include "HAL/RunnableThread.h"
 #include "Misc/Guid.h"
 
@@ -13,8 +14,8 @@
 class FWebSocketConnection
 {
 public:
-	FWebSocketConnection(TSharedPtr<IWebSocket> InSocket) : Socket(InSocket) {}
-	TSharedPtr<IWebSocket> Socket;
+	FWebSocketConnection(INetworkingWebSocket* InSocket) : Socket(InSocket) {}
+	INetworkingWebSocket* Socket;
 };
 
 IPCServer::IPCServer()
@@ -59,6 +60,7 @@ void IPCServer::Stop()
 	if (WebSocketServer)
 	{
 		// Stop server
+		delete WebSocketServer;
 		WebSocketServer = nullptr;
 	}
 	
@@ -71,10 +73,11 @@ void IPCServer::Stop()
 
 bool IPCServer::Init()
 {
-	FWebSocketsModule& WebSocketsModule = FModuleManager::LoadModuleChecked<FWebSocketsModule>(TEXT("WebSockets"));
+	IWebSocketNetworkingModule& WebSocketNetworkingModule = FModuleManager::LoadModuleChecked<IWebSocketNetworkingModule>(TEXT("WebSocketNetworking"));
 	
 	// Create WebSocket server
-	WebSocketServer = WebSocketsModule.CreateServer();
+	TUniquePtr<IWebSocketServer> Server = WebSocketNetworkingModule.CreateServer();
+	WebSocketServer = Server.Release();
 	
 	if (!WebSocketServer)
 	{
@@ -85,8 +88,28 @@ bool IPCServer::Init()
 	// Bind to localhost only
 	FString BindAddress = TEXT("127.0.0.1");
 	
+	// Define the client connected callback
+	FWebSocketClientConnectedCallBack ClientConnectedCallback = FWebSocketClientConnectedCallBack::CreateLambda(
+		[this](INetworkingWebSocket* NewClient)
+		{
+			UE_LOG(LogTemp, Log, TEXT("New WebSocket client connected"));
+			
+			// Set up message handling for the client
+			NewClient->SetReceiveCallBack(FWebSocketPacketReceivedCallBack::CreateLambda(
+				[this, NewClient](void* Data, int32 Size)
+				{
+					// Convert received data to FString
+					FString ReceivedMessage = FString(UTF8_TO_TCHAR(static_cast<const char*>(Data)));
+					
+					FWebSocketConnection Connection(NewClient);
+					ProcessMessage(ReceivedMessage, &Connection);
+				}
+			));
+		}
+	);
+	
 	// Start server
-	if (!WebSocketServer->Init(Port, BindAddress))
+	if (!WebSocketServer->Init(Port, ClientConnectedCallback, BindAddress))
 	{
 		UE_LOG(LogTemp, Error, TEXT("Failed to start WebSocket server on port %d"), Port);
 		return false;
@@ -105,40 +128,17 @@ uint32 IPCServer::Run()
 		return 1;
 	}
 	
-	// Set up connection handler
-	WebSocketServer->OnConnection().AddLambda([this](TSharedPtr<IWebSocket> Socket)
-	{
-		UE_LOG(LogTemp, Log, TEXT("New WebSocket connection"));
-		
-		Socket->OnMessage().AddLambda([this, Socket](const FString& Message)
-		{
-			FWebSocketConnection Connection(Socket);
-			ProcessMessage(Message, &Connection);
-		});
-		
-		Socket->OnClosed().AddLambda([](int32 StatusCode, const FString& Reason, bool bWasClean)
-		{
-			UE_LOG(LogTemp, Log, TEXT("WebSocket connection closed: %s"), *Reason);
-		});
-		
-		Socket->OnError().AddLambda([](const FString& Error)
-		{
-			UE_LOG(LogTemp, Error, TEXT("WebSocket error: %s"), *Error);
-		});
-	});
-	
-	// Main loop
+	// Main loop - tick the server to process connections and messages
 	while (!bShouldStop)
 	{
-		FPlatformProcess::Sleep(0.1f);
+		if (WebSocketServer)
+		{
+			WebSocketServer->Tick();
+		}
+		FPlatformProcess::Sleep(0.01f);
 	}
 	
 	return 0;
-}
-
-void IPCServer::Stop()
-{
-	bShouldStop = true;
 }
 
 void IPCServer::Exit()
@@ -147,6 +147,7 @@ void IPCServer::Exit()
 	
 	if (WebSocketServer)
 	{
+		delete WebSocketServer;
 		WebSocketServer = nullptr;
 	}
 	
@@ -223,7 +224,8 @@ void IPCServer::SendResponse(const FString& RequestId, const TSharedPtr<FJsonObj
 	UE_LOG(LogTemp, Log, TEXT("Sending response: %s"), *OutputString);
 	
 	// TODO: Send via WebSocket to the connection that made the request
-	// Connection->Socket->Send(OutputString);
+	// FTCHARToUTF8 UTF8String(*OutputString);
+	// Connection->Socket->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
 }
 
 void IPCServer::SendError(const FString& RequestId, const FString& ErrorCode, const FString& ErrorMessage, const TSharedPtr<FJsonObject>& ErrorData)
@@ -246,7 +248,8 @@ void IPCServer::SendError(const FString& RequestId, const FString& ErrorCode, co
 	UE_LOG(LogTemp, Log, TEXT("Sending error: %s"), *OutputString);
 	
 	// TODO: Send via WebSocket to the connection that made the request
-	// Connection->Socket->Send(OutputString);
+	// FTCHARToUTF8 UTF8String(*OutputString);
+	// Connection->Socket->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
 }
 
 void IPCServer::SendEvent(const FString& EventName, const TSharedPtr<FJsonObject>& EventData)
@@ -266,7 +269,8 @@ void IPCServer::SendEvent(const FString& EventName, const TSharedPtr<FJsonObject
 	
 	// TODO: Broadcast event to all connected clients
 	// For each connection in connections map:
-	//   Connection->Socket->Send(OutputString);
+	//   FTCHARToUTF8 UTF8String(*OutputString);
+	//   Connection->Socket->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
 }
 
 void IPCServer::RegisterHandler(const FString& Method, FIPCRequestHandler Handler)

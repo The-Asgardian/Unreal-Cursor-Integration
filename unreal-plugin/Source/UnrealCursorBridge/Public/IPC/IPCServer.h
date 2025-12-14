@@ -9,7 +9,7 @@
 #include "Containers/Map.h"
 #include "IPC/IPCProtocol.h"
 
-class FWebSocketServer;
+class IWebSocketServer;
 class FWebSocketConnection;
 
 DECLARE_DELEGATE_OneParam(FIPCRequestHandler, const FIPCRequestMessage&);
@@ -31,7 +31,6 @@ public:
 	// FRunnable interface
 	virtual bool Init() override;
 	virtual uint32 Run() override;
-	virtual void Stop() override;
 	virtual void Exit() override;
 
 private:
@@ -46,7 +45,7 @@ private:
 	
 	TMap<FString, FIPCRequestHandler> RequestHandlers;
 	
-	FWebSocketServer* WebSocketServer;
+	IWebSocketServer* WebSocketServer;
 	int32 Port;
 	
 	FCriticalSection HandlersLock;

@@ -10,7 +10,7 @@ class LiveCodingManager
 public:
 	static LiveCodingManager& Get();
 	
-	bool GetStatus(bool& bEnabled, bool& bCompiling, FString& LastResult);
+	bool GetStatus(bool& OutEnabled, bool& OutCompiling, FString& OutLastResult);
 	void Enable(bool bEnable);
 	void Compile();
 	void Restart();
