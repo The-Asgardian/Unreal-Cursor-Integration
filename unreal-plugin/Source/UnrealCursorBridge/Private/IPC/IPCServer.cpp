@@ -9,13 +9,15 @@
 #include "Serialization/JsonSerializer.h"
 #include "HAL/RunnableThread.h"
 #include "Misc/Guid.h"
+#include "Templates/SharedPointer.h"
 
 // Forward declaration for WebSocket connection wrapper
 class FWebSocketConnection
 {
 public:
-	FWebSocketConnection(INetworkingWebSocket* InSocket) : Socket(InSocket) {}
+	FWebSocketConnection(INetworkingWebSocket* InSocket) : Socket(InSocket), MessageBuffer(MakeShareable(new FString())) {}
 	INetworkingWebSocket* Socket;
+	TSharedPtr<FString> MessageBuffer;
 };
 
 IPCServer::IPCServer()
@@ -94,17 +96,85 @@ bool IPCServer::Init()
 		{
 			UE_LOG(LogTemp, Log, TEXT("New WebSocket client connected"));
 			
+			// Add to connected clients list
+			{
+				FScopeLock Lock(&ClientsLock);
+				ConnectedClients.Add(NewClient);
+			}
+			
+			// Create connection wrapper with message buffer
+			TSharedPtr<FWebSocketConnection> Connection = MakeShareable(new FWebSocketConnection(NewClient));
+			
+			// Store connection in clients map for later use
+			{
+				FScopeLock Lock(&ClientsLock);
+				// Note: We'll use the connection's message buffer
+			}
+			
 			// Set up message handling for the client
 			NewClient->SetReceiveCallBack(FWebSocketPacketReceivedCallBack::CreateLambda(
-				[this, NewClient](void* Data, int32 Size)
+				[this, Connection](void* Data, int32 Size)
 				{
 					// Convert received data to FString
-					FString ReceivedMessage = FString(UTF8_TO_TCHAR(static_cast<const char*>(Data)));
+					FString ReceivedChunk = FString(UTF8_TO_TCHAR(static_cast<const char*>(Data)));
 					
-					FWebSocketConnection Connection(NewClient);
-					ProcessMessage(ReceivedMessage, &Connection);
+					// Append to connection's buffer
+					*Connection->MessageBuffer += ReceivedChunk;
+					
+					// Try to parse complete JSON messages
+					// Look for complete JSON objects (balanced braces)
+					FString Remaining = *Connection->MessageBuffer;
+					
+					while (!Remaining.IsEmpty())
+					{
+						int32 OpenBraces = 0;
+						int32 StartPos = 0;
+						int32 EndPos = -1;
+						
+						// Find the start of a JSON object
+						for (int32 i = 0; i < Remaining.Len(); i++)
+						{
+							if (Remaining[i] == TEXT('{'))
+							{
+								if (OpenBraces == 0)
+								{
+									StartPos = i;
+								}
+								OpenBraces++;
+							}
+							else if (Remaining[i] == TEXT('}'))
+							{
+								OpenBraces--;
+								if (OpenBraces == 0)
+								{
+									EndPos = i;
+									break;
+								}
+							}
+						}
+						
+						if (EndPos >= 0)
+						{
+							// Extract complete message
+							FString CompleteMessage = Remaining.Mid(StartPos, EndPos - StartPos + 1);
+							Remaining = Remaining.Mid(EndPos + 1);
+							
+							ProcessMessage(CompleteMessage, Connection.Get());
+						}
+						else
+						{
+							// No complete message found, keep buffer
+							break;
+						}
+					}
+					
+					// Update buffer with remaining data
+					*Connection->MessageBuffer = Remaining;
 				}
 			));
+			
+			// Note: WebSocket disconnect handling will be done when connection is detected as closed
+			// For now, we'll handle it in the message processing or via periodic cleanup
 		}
 	);
 	
@@ -189,6 +259,12 @@ void IPCServer::ProcessMessage(const FString& Message, FWebSocketConnection* Con
 
 void IPCServer::HandleRequest(const FIPCRequestMessage& Request, FWebSocketConnection* Connection)
 {
+	// Store connection for this request
+	{
+		FScopeLock Lock(&PendingRequestsLock);
+		PendingRequests.Add(Request.Id, Connection->Socket);
+	}
+	
 	FScopeLock Lock(&HandlersLock);
 	
 	FIPCRequestHandler* Handler = RequestHandlers.Find(Request.Method);
@@ -199,12 +275,38 @@ void IPCServer::HandleRequest(const FIPCRequestMessage& Request, FWebSocketConne
 	else
 	{
 		UE_LOG(LogTemp, Warning, TEXT("No handler for method: %s"), *Request.Method);
-		SendError(Request.Id, TEXT("METHOD_NOT_FOUND"), FString::Printf(TEXT("Method not found: %s"), *Request.Method));
+		SendError(Request.Id, TEXT("METHOD_NOT_FOUND"), FString::Printf(TEXT("Method not found: %s"), *Request.Method), Connection->Socket);
 	}
 }
 
-void IPCServer::SendResponse(const FString& RequestId, const TSharedPtr<FJsonObject>& Result)
+void IPCServer::SendResponse(const FString& RequestId, const TSharedPtr<FJsonObject>& Result, INetworkingWebSocket* Connection)
 {
+	// If connection not provided, try to find it from pending requests
+	INetworkingWebSocket* TargetConnection = Connection;
+	if (!TargetConnection)
+	{
+		FScopeLock Lock(&PendingRequestsLock);
+		INetworkingWebSocket** FoundConnection = PendingRequests.Find(RequestId);
+		if (FoundConnection)
+		{
+			TargetConnection = *FoundConnection;
+			// Remove from map after use
+			PendingRequests.Remove(RequestId);
+		}
+	}
+	else
+	{
+		// Remove from map if we have the connection
+		FScopeLock Lock(&PendingRequestsLock);
+		PendingRequests.Remove(RequestId);
+	}
+	
+	if (!TargetConnection)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Cannot send response: Connection is null for request ID: %s"), *RequestId);
+		return;
+	}
+	
 	FIPCResponseMessage Response;
 	Response.Id = RequestId;
 	Response.Type = TEXT("response");
@@ -215,21 +317,22 @@ void IPCServer::SendResponse(const FString& RequestId, const TSharedPtr<FJsonObj
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
 	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	
-	// NOTE: This is a simplified implementation. In production, we need to:
-	// 1. Track active connections in a map
-	// 2. Store connection reference with each request
-	// 3. Send response to the specific connection that made the request
-	// For now, we log the response - the actual WebSocket send will be implemented
-	// when we have proper connection tracking
-	UE_LOG(LogTemp, Log, TEXT("Sending response: %s"), *OutputString);
+	// Don't log responses to prevent infinite recursion with log capture
+	// UE_LOG(LogTemp, Log, TEXT("Sending response: %s"), *OutputString);
 	
-	// TODO: Send via WebSocket to the connection that made the request
-	// FTCHARToUTF8 UTF8String(*OutputString);
-	// Connection->Socket->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
+	// Send via WebSocket
+	FTCHARToUTF8 UTF8String(*OutputString);
+	TargetConnection->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
 }
 
-void IPCServer::SendError(const FString& RequestId, const FString& ErrorCode, const FString& ErrorMessage, const TSharedPtr<FJsonObject>& ErrorData)
+void IPCServer::SendError(const FString& RequestId, const FString& ErrorCode, const FString& ErrorMessage, INetworkingWebSocket* Connection, const TSharedPtr<FJsonObject>& ErrorData)
 {
+	if (!Connection)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Cannot send error: Connection is null"));
+		return;
+	}
+	
 	FIPCResponseMessage Response;
 	Response.Id = RequestId;
 	Response.Type = TEXT("response");
@@ -247,9 +350,9 @@ void IPCServer::SendError(const FString& RequestId, const FString& ErrorCode, co
 	
 	UE_LOG(LogTemp, Log, TEXT("Sending error: %s"), *OutputString);
 	
-	// TODO: Send via WebSocket to the connection that made the request
-	// FTCHARToUTF8 UTF8String(*OutputString);
-	// Connection->Socket->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
+	// Send via WebSocket
+	FTCHARToUTF8 UTF8String(*OutputString);
+	Connection->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
 }
 
 void IPCServer::SendEvent(const FString& EventName, const TSharedPtr<FJsonObject>& EventData)
@@ -265,12 +368,19 @@ void IPCServer::SendEvent(const FString& EventName, const TSharedPtr<FJsonObject
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
 	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	
-	UE_LOG(LogTemp, Log, TEXT("Sending event: %s"), *OutputString);
+	// Don't log events to prevent infinite recursion with log capture
+	// UE_LOG(LogTemp, Log, TEXT("Sending event: %s"), *OutputString);
 	
-	// TODO: Broadcast event to all connected clients
-	// For each connection in connections map:
-	//   FTCHARToUTF8 UTF8String(*OutputString);
-	//   Connection->Socket->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
+	// Broadcast event to all connected clients
+	FTCHARToUTF8 UTF8String(*OutputString);
+	FScopeLock Lock(&ClientsLock);
+	for (INetworkingWebSocket* Client : ConnectedClients)
+	{
+		if (Client)
+		{
+			Client->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
+		}
+	}
 }
 
 void IPCServer::RegisterHandler(const FString& Method, FIPCRequestHandler Handler)

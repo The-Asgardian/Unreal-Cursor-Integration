@@ -8,6 +8,7 @@
 #include "Containers/Queue.h"
 #include "Containers/Map.h"
 #include "IPC/IPCProtocol.h"
+#include "INetworkingWebSocket.h"
 
 class IWebSocketServer;
 class FWebSocketConnection;
@@ -22,8 +23,8 @@ public:
 	void Start();
 	void Stop();
 	
-	void SendResponse(const FString& RequestId, const TSharedPtr<FJsonObject>& Result);
-	void SendError(const FString& RequestId, const FString& ErrorCode, const FString& ErrorMessage, const TSharedPtr<FJsonObject>& ErrorData = nullptr);
+	void SendResponse(const FString& RequestId, const TSharedPtr<FJsonObject>& Result, INetworkingWebSocket* Connection);
+	void SendError(const FString& RequestId, const FString& ErrorCode, const FString& ErrorMessage, INetworkingWebSocket* Connection, const TSharedPtr<FJsonObject>& ErrorData = nullptr);
 	void SendEvent(const FString& EventName, const TSharedPtr<FJsonObject>& EventData);
 	
 	void RegisterHandler(const FString& Method, FIPCRequestHandler Handler);
@@ -44,10 +45,14 @@ private:
 	FThreadSafeBool bIsRunning;
 	
 	TMap<FString, FIPCRequestHandler> RequestHandlers;
+	TMap<FString, INetworkingWebSocket*> PendingRequests; // Map request ID to connection
+	TArray<INetworkingWebSocket*> ConnectedClients; // Track all connected clients for event broadcasting
 	
 	IWebSocketServer* WebSocketServer;
 	int32 Port;
 	
 	FCriticalSection HandlersLock;
+	FCriticalSection PendingRequestsLock;
+	FCriticalSection ClientsLock;
 };
 

@@ -3,24 +3,36 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/ThreadSafeBool.h"
+#include "Engine/Engine.h"
 
-// Placeholder for Phase 3.5: Run Module
 class RunManager
 {
 public:
 	static RunManager& Get();
 	
-	void PlayPIE();
+	// Play In Editor
+	bool PlayInEditor();
 	void StopPIE();
-	void RunStandalone();
-	void RunDedicatedServer();
-	
 	bool IsPIERunning() const { return bPIERunning; }
+	
+	// Standalone game
+	bool StartStandalone();
+	void StopStandalone();
+	
+	// Dedicated server (platform dependent)
+	bool StartDedicatedServer();
+	void StopDedicatedServer();
 
 private:
-	RunManager() = default;
-	~RunManager() = default;
+	RunManager();
+	~RunManager();
 	
-	bool bPIERunning = false;
+	FThreadSafeBool bPIERunning;
+	FThreadSafeBool bStandaloneRunning;
+	FThreadSafeBool bDedicatedServerRunning;
+	
+	void SendPIEStatusEvent();
+	void SendGameStartedEvent();
+	void SendGameStoppedEvent();
 };
-

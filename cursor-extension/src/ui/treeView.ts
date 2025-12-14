@@ -39,30 +39,54 @@ export class UnrealTreeDataProvider implements vscode.TreeDataProvider<UnrealTre
 
     getChildren(element?: UnrealTreeItem): Thenable<UnrealTreeItem[]> {
         if (!element) {
-            // Root level - show main sections
+            // Root level - status indicators with action buttons
             return Promise.resolve([
                 this.createConnectionItem(),
+                this.createPlayEditorItem(),
                 this.createBuildItem(),
                 this.createLiveCodingItem(),
-                this.createRunItem(),
-                this.createLogsItem(),
-                this.createProfilingItem()
+                this.createRunItem()
             ]);
         }
 
-        // Child items based on parent
-        if (element.label === 'Connection') {
-            return Promise.resolve(this.getConnectionChildren());
-        } else if (element.label === 'Build') {
-            return Promise.resolve(this.getBuildChildren());
-        } else if (element.label === 'Live Coding') {
-            return Promise.resolve(this.getLiveCodingChildren());
-        } else if (element.label === 'Run') {
-            return Promise.resolve(this.getRunChildren());
-        } else if (element.label === 'Logs') {
-            return Promise.resolve(this.getLogsChildren());
-        } else if (element.label === 'Performance') {
-            return Promise.resolve(this.getProfilingChildren());
+        // Return action buttons for each status item
+        if (element.label === 'Connected' || element.label === 'Disconnected' || element.label === 'Connecting...') {
+            return Promise.resolve([
+                this.createActionItem('Connect', 'unreal.connect', 'plug', !this.connectionState.connected && !this.connectionState.connecting),
+                this.createActionItem('Disconnect', 'unreal.disconnect', 'plug', this.connectionState.connected)
+            ]);
+        }
+
+        if (element.label === 'Play Editor' || element.label.includes('Play Editor')) {
+            return Promise.resolve([
+                this.createActionItem('Launch Unreal Editor', 'unreal.editor.launch', 'rocket', true)
+            ]);
+        }
+
+        if (element.label === 'Building...' || element.label === 'Ready' || element.label.includes('Build')) {
+            return Promise.resolve([
+                this.createActionItem('Build Editor', 'unreal.build.editor', 'tools', this.connectionState.connected && !this.connectionState.buildInProgress),
+                this.createActionItem('Rebuild', 'unreal.build.rebuild', 'sync', this.connectionState.connected && !this.connectionState.buildInProgress),
+                this.createActionItem('Clean', 'unreal.build.clean', 'trash', this.connectionState.connected && !this.connectionState.buildInProgress),
+                this.createActionItem('Cancel Build', 'unreal.build.cancel', 'stop-circle', this.connectionState.connected && this.connectionState.buildInProgress)
+            ]);
+        }
+
+        if (element.label === 'Compiling...' || element.label === 'Enabled' || element.label === 'Disabled' || element.label.includes('Live Coding')) {
+            const canCompile = this.connectionState.connected && 
+                              this.connectionState.capabilities?.liveCoding && 
+                              !this.connectionState.liveCodingCompiling;
+            return Promise.resolve([
+                this.createActionItem('Compile (Live Coding)', 'unreal.liveCoding.compile', 'sync', canCompile)
+            ]);
+        }
+
+        if (element.label === 'Running' || element.label === 'Stopped' || element.label.includes('Run')) {
+            return Promise.resolve([
+                this.createActionItem('Play In Editor', 'unreal.run.playPIE', 'play', this.connectionState.connected && !this.connectionState.pieRunning),
+                this.createActionItem('Stop PIE', 'unreal.run.stopPIE', 'stop', this.connectionState.connected && this.connectionState.pieRunning),
+                this.createActionItem('Start Debugging', 'unreal.debug.start', 'debug-start', this.connectionState.connected && !this.connectionState.pieRunning)
+            ]);
         }
 
         return Promise.resolve([]);
@@ -75,21 +99,30 @@ export class UnrealTreeDataProvider implements vscode.TreeDataProvider<UnrealTre
                     new vscode.ThemeIcon('plug', new vscode.ThemeColor('errorForeground'));
         
         return new UnrealTreeItem(
-            `Connection: ${status}`,
+            status,
             vscode.TreeItemCollapsibleState.Collapsed,
             undefined,
             icon
         );
     }
 
+    private createPlayEditorItem(): UnrealTreeItem {
+        return new UnrealTreeItem(
+            'Play Editor',
+            vscode.TreeItemCollapsibleState.Collapsed,
+            undefined,
+            new vscode.ThemeIcon('rocket')
+        );
+    }
+
     private createBuildItem(): UnrealTreeItem {
-        const status = this.connectionState.buildInProgress ? 'Building...' : 'Ready';
+        const status = this.connectionState.buildInProgress ? 'Building...' : 'Build Tools';
         const icon = this.connectionState.buildInProgress ? 
                     new vscode.ThemeIcon('sync~spin') : 
                     new vscode.ThemeIcon('tools');
         
         return new UnrealTreeItem(
-            `Build: ${status}`,
+            status,
             vscode.TreeItemCollapsibleState.Collapsed,
             undefined,
             icon
@@ -99,13 +132,13 @@ export class UnrealTreeDataProvider implements vscode.TreeDataProvider<UnrealTre
     private createLiveCodingItem(): UnrealTreeItem {
         const enabled = this.connectionState.liveCodingEnabled;
         const compiling = this.connectionState.liveCodingCompiling;
-        const status = compiling ? 'Compiling...' : enabled ? 'Enabled' : 'Disabled';
+        const status = compiling ? 'Compiling...' : enabled ? 'Live Coding' : 'Live Coding';
         const icon = compiling ? 
                     new vscode.ThemeIcon('sync~spin') : 
                     new vscode.ThemeIcon('sync');
         
         const item = new UnrealTreeItem(
-            `Live Coding: ${status}`,
+            status,
             vscode.TreeItemCollapsibleState.Collapsed,
             undefined,
             icon
@@ -120,270 +153,36 @@ export class UnrealTreeDataProvider implements vscode.TreeDataProvider<UnrealTre
     }
 
     private createRunItem(): UnrealTreeItem {
-        const status = this.connectionState.pieRunning ? 'Running' : 'Stopped';
+        const status = this.connectionState.pieRunning ? 'Running' : 'Run';
         const icon = this.connectionState.pieRunning ? 
                     new vscode.ThemeIcon('debug-pause') : 
                     new vscode.ThemeIcon('play');
         
         return new UnrealTreeItem(
-            `Run: ${status}`,
+            status,
             vscode.TreeItemCollapsibleState.Collapsed,
             undefined,
             icon
         );
     }
 
-    private createLogsItem(): UnrealTreeItem {
-        return new UnrealTreeItem(
-            'Logs',
-            vscode.TreeItemCollapsibleState.Collapsed,
-            undefined,
-            new vscode.ThemeIcon('output')
+    private createActionItem(label: string, command: string, icon: string, enabled: boolean = true): UnrealTreeItem {
+        const item = new UnrealTreeItem(
+            label,
+            vscode.TreeItemCollapsibleState.None,
+            enabled ? {
+                command: command,
+                title: label
+            } : undefined,
+            enabled ? new vscode.ThemeIcon(icon) : new vscode.ThemeIcon(icon, new vscode.ThemeColor('disabledForeground'))
         );
-    }
-
-    private createProfilingItem(): UnrealTreeItem {
-        const status = this.connectionState.profilingActive ? 'Active' : 'Inactive';
-        const icon = this.connectionState.profilingActive ? 
-                    new vscode.ThemeIcon('graph') : 
-                    new vscode.ThemeIcon('graph', new vscode.ThemeColor('disabledForeground'));
         
-        return new UnrealTreeItem(
-            `Performance: ${status}`,
-            vscode.TreeItemCollapsibleState.Collapsed,
-            undefined,
-            icon
-        );
-    }
-
-    private getConnectionChildren(): UnrealTreeItem[] {
-        const items: UnrealTreeItem[] = [];
-        
-        if (this.connectionState.projectInfo) {
-            items.push(new UnrealTreeItem(
-                `Project: ${this.connectionState.projectInfo.projectName}`,
-                vscode.TreeItemCollapsibleState.None
-            ));
-            items.push(new UnrealTreeItem(
-                `Engine: ${this.connectionState.projectInfo.engineVersion}`,
-                vscode.TreeItemCollapsibleState.None
-            ));
+        if (!enabled) {
+            item.description = '(requires connection)';
         }
         
-        if (this.connectionState.connected) {
-            items.push(new UnrealTreeItem(
-                'Disconnect',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.disconnect',
-                    title: 'Disconnect'
-                },
-                new vscode.ThemeIcon('plug')
-            ));
-        } else {
-            items.push(new UnrealTreeItem(
-                'Connect',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.connect',
-                    title: 'Connect'
-                },
-                new vscode.ThemeIcon('plug')
-            ));
-        }
-        
-        items.push(new UnrealTreeItem(
-            'Settings',
-            vscode.TreeItemCollapsibleState.None,
-            {
-                command: 'unreal.settings.open',
-                title: 'Settings'
-            },
-            new vscode.ThemeIcon('settings-gear')
-        ));
-        
-        return items;
+        return item;
     }
 
-    private getBuildChildren(): UnrealTreeItem[] {
-        return [
-            new UnrealTreeItem(
-                'Build Editor',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.build.editor',
-                    title: 'Build Editor'
-                },
-                new vscode.ThemeIcon('tools')
-            ),
-            new UnrealTreeItem(
-                'Build Game',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.build.game',
-                    title: 'Build Game'
-                },
-                new vscode.ThemeIcon('tools')
-            ),
-            new UnrealTreeItem(
-                'Clean',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.build.clean',
-                    title: 'Clean'
-                },
-                new vscode.ThemeIcon('trash')
-            ),
-            new UnrealTreeItem(
-                'Generate Project Files',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.project.generateFiles',
-                    title: 'Generate Project Files'
-                },
-                new vscode.ThemeIcon('file-code')
-            ),
-            new UnrealTreeItem(
-                'Generate compile_commands.json',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.intellisense.generateCompileCommands',
-                    title: 'Generate compile_commands.json'
-                },
-                new vscode.ThemeIcon('code')
-            )
-        ];
-    }
-
-    private getLiveCodingChildren(): UnrealTreeItem[] {
-        const items: UnrealTreeItem[] = [];
-        
-        if (!this.connectionState.capabilities?.liveCoding) {
-            items.push(new UnrealTreeItem(
-                'Live Coding Unsupported',
-                vscode.TreeItemCollapsibleState.None
-            ));
-            return items;
-        }
-        
-        items.push(new UnrealTreeItem(
-            'Compile',
-            vscode.TreeItemCollapsibleState.None,
-            {
-                command: 'unreal.liveCoding.compile',
-                title: 'Compile'
-            },
-            new vscode.ThemeIcon('sync')
-        ));
-        
-        items.push(new UnrealTreeItem(
-            this.connectionState.liveCodingEnabled ? 'Disable' : 'Enable',
-            vscode.TreeItemCollapsibleState.None,
-            {
-                command: 'unreal.liveCoding.toggle',
-                title: 'Toggle Live Coding'
-            },
-            new vscode.ThemeIcon('sync')
-        ));
-        
-        items.push(new UnrealTreeItem(
-            'Restart',
-            vscode.TreeItemCollapsibleState.None,
-            {
-                command: 'unreal.liveCoding.restart',
-                title: 'Restart Live Coding'
-            },
-            new vscode.ThemeIcon('refresh')
-        ));
-        
-        return items;
-    }
-
-    private getRunChildren(): UnrealTreeItem[] {
-        return [
-            new UnrealTreeItem(
-                'Play In Editor',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.run.playPIE',
-                    title: 'Play In Editor'
-                },
-                new vscode.ThemeIcon('play')
-            ),
-            new UnrealTreeItem(
-                'Stop PIE',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.run.stopPIE',
-                    title: 'Stop PIE'
-                },
-                new vscode.ThemeIcon('stop')
-            ),
-            new UnrealTreeItem(
-                'Run Standalone',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.run.standalone',
-                    title: 'Run Standalone'
-                },
-                new vscode.ThemeIcon('terminal')
-            )
-        ];
-    }
-
-    private getLogsChildren(): UnrealTreeItem[] {
-        return [
-            new UnrealTreeItem(
-                'Open Logs View',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.logs.open',
-                    title: 'Open Logs View'
-                },
-                new vscode.ThemeIcon('output')
-            ),
-            new UnrealTreeItem(
-                'Clear Logs',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.logs.clear',
-                    title: 'Clear Logs'
-                },
-                new vscode.ThemeIcon('clear-all')
-            ),
-            new UnrealTreeItem(
-                'Set Filter',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.logs.setFilter',
-                    title: 'Set Filter'
-                },
-                new vscode.ThemeIcon('filter')
-            )
-        ];
-    }
-
-    private getProfilingChildren(): UnrealTreeItem[] {
-        return [
-            new UnrealTreeItem(
-                this.connectionState.profilingActive ? 'Stop Profiling' : 'Start Profiling',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: this.connectionState.profilingActive ? 'unreal.profiling.stop' : 'unreal.profiling.start',
-                    title: this.connectionState.profilingActive ? 'Stop Profiling' : 'Start Profiling'
-                },
-                new vscode.ThemeIcon('graph')
-            ),
-            new UnrealTreeItem(
-                'Open Dashboard',
-                vscode.TreeItemCollapsibleState.None,
-                {
-                    command: 'unreal.profiling.openDashboard',
-                    title: 'Open Dashboard'
-                },
-                new vscode.ThemeIcon('dashboard')
-            )
-        ];
-    }
 }
 

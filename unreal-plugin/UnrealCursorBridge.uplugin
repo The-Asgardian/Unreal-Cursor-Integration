@@ -22,6 +22,12 @@
 			"Type": "Editor",
 			"LoadingPhase": "PostEngineInit"
 		}
+	],
+	"Plugins": [
+		{
+			"Name": "WebSocketNetworking",
+			"Enabled": true
+		}
 	]
 }
 

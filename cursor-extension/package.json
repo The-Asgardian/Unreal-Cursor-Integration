@@ -3,6 +3,11 @@
   "displayName": "Unreal Engine Cursor Integration",
   "description": "Deep Unreal Engine Editor integration for Cursor",
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/The-Asgardian/Unreal-Cursor-Integration.git"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
@@ -10,7 +15,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "workspaceContains:**/*.uproject"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -29,6 +35,11 @@
           "id": "unrealTreeView",
           "name": "Unreal Engine",
           "when": "true"
+        },
+        {
+          "id": "unrealBuildView",
+          "name": "Build Tools",
+          "when": "false"
         }
       ]
     },
@@ -147,6 +158,51 @@
         "command": "unreal.settings.open",
         "title": "Open Settings",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "unreal.testConnection",
+        "title": "Test Connection",
+        "icon": "$(debug-console)"
+      },
+      {
+        "command": "unreal.build.cancel",
+        "title": "Cancel Build",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "unreal.build.listTargets",
+        "title": "List Build Targets",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "unreal.editor.launch",
+        "title": "Launch Unreal Editor",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "unreal.build.openView",
+        "title": "Open Build Tools",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "unreal.build.rebuild",
+        "title": "Rebuild",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "unreal.debug.start",
+        "title": "Start Debugging",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "unreal.logs.subscribe",
+        "title": "Subscribe to Logs",
+        "icon": "$(output)"
+      },
+      {
+        "command": "unreal.logs.unsubscribe",
+        "title": "Unsubscribe from Logs",
+        "icon": "$(output)"
       }
     ],
     "menus": {
@@ -162,19 +218,79 @@
           "group": "navigation"
         },
         {
+          "command": "unreal.editor.launch",
+          "when": "view == unrealTreeView",
+          "group": "1_build@1"
+        },
+        {
           "command": "unreal.build.editor",
-          "when": "view == unrealTreeView && unreal.connected",
-          "group": "build"
+          "when": "view == unrealTreeView && unreal.connected && !unreal.buildInProgress",
+          "group": "1_build@2"
+        },
+        {
+          "command": "unreal.build.rebuild",
+          "when": "view == unrealTreeView && unreal.connected && !unreal.buildInProgress",
+          "group": "1_build@3"
+        },
+        {
+          "command": "unreal.build.clean",
+          "when": "view == unrealTreeView && unreal.connected && !unreal.buildInProgress",
+          "group": "1_build@4"
+        },
+        {
+          "command": "unreal.build.cancel",
+          "when": "view == unrealTreeView && unreal.connected && unreal.buildInProgress",
+          "group": "1_build@5"
+        },
+        {
+          "command": "unreal.liveCoding.compile",
+          "when": "view == unrealTreeView && unreal.connected && unreal.capabilities.liveCoding && !unreal.liveCodingCompiling",
+          "group": "2_livecode@1"
         },
         {
           "command": "unreal.run.playPIE",
-          "when": "view == unrealTreeView && unreal.connected",
-          "group": "run"
+          "when": "view == unrealTreeView && unreal.connected && !unreal.pieRunning",
+          "group": "3_run@1"
         },
         {
-          "command": "unreal.logs.open",
-          "when": "view == unrealTreeView && unreal.connected",
-          "group": "logs"
+          "command": "unreal.run.stopPIE",
+          "when": "view == unrealTreeView && unreal.connected && unreal.pieRunning",
+          "group": "3_run@2"
+        },
+        {
+          "command": "unreal.debug.start",
+          "when": "view == unrealTreeView && unreal.connected && !unreal.pieRunning",
+          "group": "3_run@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "unreal.editor.launch",
+          "when": "true"
+        },
+        {
+          "command": "unreal.build.editor",
+          "when": "unreal.connected"
+        },
+        {
+          "command": "unreal.build.rebuild",
+          "when": "unreal.connected"
+        },
+        {
+          "command": "unreal.build.clean",
+          "when": "unreal.connected"
+        },
+        {
+          "command": "unreal.liveCoding.compile",
+          "when": "unreal.connected && unreal.capabilities.liveCoding"
+        },
+        {
+          "command": "unreal.run.playPIE",
+          "when": "unreal.connected"
+        },
+        {
+          "command": "unreal.debug.start",
+          "when": "unreal.connected"
         }
       ],
       "view/item/context": [
@@ -247,7 +363,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package"
+    "package": "vsce package",
+    "package:npm": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -84,7 +84,8 @@ export class StatusBarManager {
         // Build status
         if (this.connectionState.buildInProgress) {
             this.buildItem.text = '$(sync~spin) Building...';
-            this.buildItem.command = undefined;
+            this.buildItem.command = 'unreal.build.cancel';
+            this.buildItem.tooltip = 'Click to cancel build';
             this.buildItem.show();
         } else {
             this.buildItem.hide();

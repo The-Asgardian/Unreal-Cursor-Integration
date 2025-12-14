@@ -56,10 +56,14 @@ export class IPCClient {
 
             ws.on('message', (data: WebSocket.Data) => {
                 try {
-                    const message: Message = JSON.parse(data.toString());
+                    const rawMessage = data.toString();
+                    // Only log in debug mode to prevent log spam
+                    // console.log('[IPC Client] Received message:', rawMessage);
+                    const message: Message = JSON.parse(rawMessage);
                     this.handleMessage(message);
                 } catch (error) {
-                    console.error('Failed to parse message:', error);
+                    // Only log parse errors, not every message
+                    console.error('[IPC Client] Failed to parse message:', error);
                 }
             });
 
@@ -110,7 +114,10 @@ export class IPCClient {
             });
 
             try {
-                this.ws.send(JSON.stringify(request));
+                const requestJson = JSON.stringify(request);
+                // Only log in debug mode to prevent log spam
+                // console.log('[IPC Client] Sending request:', requestJson);
+                this.ws.send(requestJson);
             } catch (error) {
                 this.pendingRequests.delete(id);
                 clearTimeout(timeoutHandle);
@@ -152,6 +159,9 @@ export class IPCClient {
     }
 
     private handleMessage(message: Message): void {
+        // Only log in debug mode to prevent log spam
+        // console.log('[IPC Client] Handling message:', JSON.stringify(message));
+        
         // Notify all message handlers
         for (const handler of this.messageHandlers) {
             handler(message);
@@ -159,11 +169,15 @@ export class IPCClient {
 
         if (message.type === 'response') {
             const response = message as ResponseMessage;
+            // Only log errors, not every response
             const pending = this.pendingRequests.get(response.id);
             if (pending) {
                 clearTimeout(pending.timeout);
                 this.pendingRequests.delete(response.id);
                 pending.resolve(response);
+            } else {
+                // Only log if it's unexpected (no pending request)
+                console.warn('[IPC Client] No pending request found for response ID:', response.id);
             }
         } else if (message.type === 'event') {
             const event = message as EventMessage;

@@ -1,63 +1,73 @@
 import * as vscode from 'vscode';
-import { EventMessage } from '../ipc/protocol';
 
-export class BuildDiagnostics {
+export interface BuildDiagnostic {
+    file: string;
+    line: number;
+    column: number;
+    severity: 'error' | 'warning' | 'info';
+    message: string;
+    buildId: string;
+}
+
+export class BuildDiagnosticsManager {
     private diagnosticCollection: vscode.DiagnosticCollection;
+    private diagnosticsByBuild: Map<string, BuildDiagnostic[]> = new Map();
 
     constructor() {
         this.diagnosticCollection = vscode.languages.createDiagnosticCollection('unreal-build');
     }
 
-    clear(): void {
+    addDiagnostic(diagnostic: BuildDiagnostic): void {
+        const buildDiagnostics = this.diagnosticsByBuild.get(diagnostic.buildId) || [];
+        buildDiagnostics.push(diagnostic);
+        this.diagnosticsByBuild.set(diagnostic.buildId, buildDiagnostics);
+        
+        this.updateDiagnostics();
+    }
+
+    clearBuildDiagnostics(buildId: string): void {
+        this.diagnosticsByBuild.delete(buildId);
+        this.updateDiagnostics();
+    }
+
+    clearAllDiagnostics(): void {
+        this.diagnosticsByBuild.clear();
         this.diagnosticCollection.clear();
     }
 
-    processBuildDiagnostic(event: EventMessage): void {
-        if (event.event === 'build.diagnostic' && event.data) {
-            const diagnostic = this.parseDiagnostic(event.data);
-            if (diagnostic) {
-                const uri = vscode.Uri.file(diagnostic.file);
-                const existing = this.diagnosticCollection.get(uri) || [];
-                this.diagnosticCollection.set(uri, [...existing, diagnostic.diagnostic]);
+    private updateDiagnostics(): void {
+        // Group diagnostics by file
+        const diagnosticsByFile = new Map<string, vscode.Diagnostic[]>();
+
+        for (const diagnostics of this.diagnosticsByBuild.values()) {
+            for (const diag of diagnostics) {
+                const uri = vscode.Uri.file(diag.file);
+                const fileDiags = diagnosticsByFile.get(diag.file) || [];
+                
+                const severity = diag.severity === 'error' ? vscode.DiagnosticSeverity.Error :
+                                 diag.severity === 'warning' ? vscode.DiagnosticSeverity.Warning :
+                                 vscode.DiagnosticSeverity.Information;
+                
+                const vscodeDiag = new vscode.Diagnostic(
+                    new vscode.Range(
+                        diag.line - 1,
+                        diag.column - 1,
+                        diag.line - 1,
+                        diag.column - 1
+                    ),
+                    diag.message,
+                    severity
+                );
+                
+                fileDiags.push(vscodeDiag);
+                diagnosticsByFile.set(diag.file, fileDiags);
             }
         }
-    }
 
-    private parseDiagnostic(data: any): { file: string; diagnostic: vscode.Diagnostic } | null {
-        if (!data.file || !data.message) {
-            return null;
-        }
-
-        const severity = this.mapSeverity(data.severity || 'error');
-        const line = Math.max(0, (data.line || 1) - 1);
-        const column = Math.max(0, (data.column || 1) - 1);
-
-        const range = new vscode.Range(
-            line,
-            column,
-            line,
-            column + 100 // Default range length
-        );
-
-        const diagnostic = new vscode.Diagnostic(range, data.message, severity);
-        diagnostic.source = 'Unreal Build';
-
-        return {
-            file: data.file,
-            diagnostic
-        };
-    }
-
-    private mapSeverity(severity: string): vscode.DiagnosticSeverity {
-        switch (severity.toLowerCase()) {
-            case 'error':
-                return vscode.DiagnosticSeverity.Error;
-            case 'warning':
-                return vscode.DiagnosticSeverity.Warning;
-            case 'info':
-                return vscode.DiagnosticSeverity.Information;
-            default:
-                return vscode.DiagnosticSeverity.Error;
+        // Update diagnostic collection
+        this.diagnosticCollection.clear();
+        for (const [file, diags] of diagnosticsByFile) {
+            this.diagnosticCollection.set(vscode.Uri.file(file), diags);
         }
     }
 
@@ -65,4 +75,3 @@ export class BuildDiagnostics {
         this.diagnosticCollection.dispose();
     }
 }
-

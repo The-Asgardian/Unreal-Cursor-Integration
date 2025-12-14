@@ -5,7 +5,7 @@
 #include "CoreMinimal.h"
 #include "Misc/OutputDevice.h"
 
-// Placeholder for Phase 4: Real-time Logging
+// Real-time Logging - Captures all Unreal Engine logs
 class FLogCaptureDevice : public FOutputDevice
 {
 public:
@@ -16,10 +16,16 @@ public:
 	
 	void Subscribe(const TArray<FString>& Categories, const FString& Verbosity, const FString& Search);
 	void Unsubscribe();
+	
+	static FLogCaptureDevice& Get();
 
 private:
+	FString GetVerbosityString(ELogVerbosity::Type Verbosity) const;
+	bool ShouldIncludeVerbosity(ELogVerbosity::Type CurrentVerbosity, const FString& FilterVerbosityStr) const;
+
 	TArray<FString> SubscribedCategories;
 	FString FilterVerbosity;
 	FString SearchFilter;
+	bool bIsSubscribed;
 };
 

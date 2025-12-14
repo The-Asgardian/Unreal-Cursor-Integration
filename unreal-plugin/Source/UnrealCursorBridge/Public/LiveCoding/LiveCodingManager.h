@@ -3,26 +3,34 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/ThreadSafeBool.h"
 
-// Placeholder for Phase 3: Live Coding
 class LiveCodingManager
 {
 public:
 	static LiveCodingManager& Get();
 	
-	bool GetStatus(bool& OutEnabled, bool& OutCompiling, FString& OutLastResult);
-	void Enable(bool bEnable);
-	void Compile();
-	void Restart();
+	// Get Live Coding status
+	bool IsEnabled() const { return bEnabled; }
+	bool IsCompiling() const { return bCompiling; }
+	FString GetLastResult() const { return LastResult; }
 	
-	bool IsAvailable() const;
+	// Enable/disable Live Coding
+	void SetEnabled(bool bInEnabled);
+	
+	// Trigger Live Coding compile
+	bool Compile();
+	
+	// Restart Live Coding
+	bool Restart();
 
 private:
-	LiveCodingManager() = default;
-	~LiveCodingManager() = default;
+	LiveCodingManager();
+	~LiveCodingManager();
 	
-	bool bEnabled = false;
-	bool bCompiling = false;
+	FThreadSafeBool bEnabled;
+	FThreadSafeBool bCompiling;
 	FString LastResult;
+	
+	void SendStatusChangedEvent();
 };
-

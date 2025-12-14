@@ -176,13 +176,102 @@ if (-not $SkipPlugin) {
     # Remove existing plugin if it exists
     if (Test-Path $pluginTargetDir) {
         Write-Host "  Removing existing plugin..." -ForegroundColor Gray
-        Remove-Item -Path $pluginTargetDir -Recurse -Force
+        try {
+            Remove-Item -Path $pluginTargetDir -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            # DLL might be locked if editor is running
+            if ($_.Exception.Message -like "*denied*" -or $_.Exception.Message -like "*locked*") {
+                Write-Host "  WARNING: Some plugin files are locked (Unreal Editor may be running)" -ForegroundColor Yellow
+                Write-Host "  Attempting to remove unlocked files only..." -ForegroundColor Gray
+                
+                # Try to remove individual files/directories that aren't locked
+                $items = Get-ChildItem -Path $pluginTargetDir -Recurse | Sort-Object -Property FullName -Descending
+                foreach ($item in $items) {
+                    try {
+                        Remove-Item -Path $item.FullName -Force -ErrorAction Stop
+                    }
+                    catch {
+                        # Skip locked files (like DLLs)
+                        Write-Host "    Skipping locked file: $($item.Name)" -ForegroundColor DarkYellow
+                    }
+                }
+                
+                # Try to remove empty directories
+                $dirs = Get-ChildItem -Path $pluginTargetDir -Recurse -Directory | Sort-Object -Property FullName -Descending
+                foreach ($dir in $dirs) {
+                    try {
+                        if ((Get-ChildItem -Path $dir.FullName -Force | Measure-Object).Count -eq 0) {
+                            Remove-Item -Path $dir.FullName -Force -ErrorAction Stop
+                        }
+                    }
+                    catch {
+                        # Skip if can't remove
+                    }
+                }
+                
+                Write-Host "  NOTE: Locked files (like .dll) will be replaced when editor is closed" -ForegroundColor Yellow
+                Write-Host "  OR use Live Coding (Ctrl+Alt+F11) to hot-reload without restarting editor" -ForegroundColor Yellow
+            }
+            else {
+                throw
+            }
+        }
     }
     
     # Copy plugin files
-    Copy-Item -Path $pluginSourceDir -Destination $pluginTargetDir -Recurse -Force
-    
-    Write-Host "  [OK] Plugin copied successfully!" -ForegroundColor Green
+    Write-Host "  Copying plugin files..." -ForegroundColor Gray
+    try {
+        # Copy source files (these should always work)
+        $sourceFiles = Get-ChildItem -Path $pluginSourceDir -Recurse -File
+        $skippedFiles = @()
+        
+        foreach ($file in $sourceFiles) {
+            $relativePath = $file.FullName.Substring($pluginSourceDir.Length + 1)
+            $destPath = Join-Path $pluginTargetDir $relativePath
+            $destDir = Split-Path -Parent $destPath
+            
+            # Create directory if needed
+            if (-not (Test-Path $destDir)) {
+                New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+            }
+            
+            try {
+                Copy-Item -Path $file.FullName -Destination $destPath -Force -ErrorAction Stop
+            }
+            catch {
+                if ($_.Exception.Message -like "*denied*" -or $_.Exception.Message -like "*locked*") {
+                    $skippedFiles += $relativePath
+                    Write-Host "    Skipping locked file: $relativePath" -ForegroundColor DarkYellow
+                }
+                else {
+                    throw
+                }
+            }
+        }
+        
+        if ($skippedFiles.Count -gt 0) {
+            Write-Host "  WARNING: Some files could not be copied (locked by editor):" -ForegroundColor Yellow
+            foreach ($file in $skippedFiles) {
+                Write-Host "    - $file" -ForegroundColor DarkYellow
+            }
+            Write-Host "  These will be updated when you close the editor or use Live Coding" -ForegroundColor Yellow
+        }
+        
+        Write-Host "  [OK] Plugin files copied successfully!" -ForegroundColor Green
+        
+        if ($skippedFiles.Count -gt 0) {
+            Write-Host "" -ForegroundColor Yellow
+            Write-Host "  IMPORTANT: To apply locked file changes:" -ForegroundColor Yellow
+            Write-Host "    1. Close Unreal Editor, OR" -ForegroundColor Yellow
+            Write-Host "    2. Use Live Coding (Ctrl+Alt+F11) to hot-reload the plugin" -ForegroundColor Yellow
+            Write-Host "" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "ERROR: Failed to copy plugin files: $_" -ForegroundColor Red
+        exit 1
+    }
     
     # Save project path to config for next time
     $configFile = Join-Path $scriptRoot ".unreal-project-path"

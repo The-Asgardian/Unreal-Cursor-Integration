@@ -8,4 +8,6 @@ webpack.config.js
 .prettierrc
 *.vsix
 node_modules/**
+!node_modules/ws
+!node_modules/uuid
 

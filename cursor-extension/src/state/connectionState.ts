@@ -20,6 +20,7 @@ export class ConnectionState {
     private _connecting: boolean = false;
     private _projectInfo: ProjectInfo | undefined;
     private _buildInProgress: boolean = false;
+    private _currentBuildId: string | undefined;
     private _liveCodingEnabled: boolean = false;
     private _liveCodingCompiling: boolean = false;
     private _pieRunning: boolean = false;
@@ -66,6 +67,17 @@ export class ConnectionState {
     set buildInProgress(value: boolean) {
         if (this._buildInProgress !== value) {
             this._buildInProgress = value;
+            this._onStateChangedEmitter.fire();
+        }
+    }
+    
+    get currentBuildId(): string | undefined {
+        return this._currentBuildId;
+    }
+    
+    set currentBuildId(value: string | undefined) {
+        if (this._currentBuildId !== value) {
+            this._currentBuildId = value;
             this._onStateChangedEmitter.fire();
         }
     }

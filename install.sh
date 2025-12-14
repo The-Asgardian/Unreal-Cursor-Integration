@@ -183,13 +183,57 @@ if [ "$SKIP_PLUGIN" = false ]; then
     # Remove existing plugin if it exists
     if [ -d "$PLUGIN_TARGET_DIR" ]; then
         echo -e "${GRAY}  Removing existing plugin...${NC}"
-        rm -rf "$PLUGIN_TARGET_DIR"
+        
+        # Try to remove, but handle locked files gracefully
+        if ! rm -rf "$PLUGIN_TARGET_DIR" 2>/dev/null; then
+            echo -e "${YELLOW}  WARNING: Some plugin files are locked (Unreal Editor may be running)${NC}"
+            echo -e "${GRAY}  Attempting to remove unlocked files only...${NC}"
+            
+            # Remove files that aren't locked
+            find "$PLUGIN_TARGET_DIR" -type f ! -name "*.dll" ! -name "*.so" ! -name "*.dylib" -delete 2>/dev/null || true
+            find "$PLUGIN_TARGET_DIR" -type d -empty -delete 2>/dev/null || true
+            
+            echo -e "${YELLOW}  NOTE: Locked files (like .dll/.so) will be replaced when editor is closed${NC}"
+            echo -e "${YELLOW}  OR use Live Coding to hot-reload without restarting editor${NC}"
+        fi
     fi
     
     # Copy plugin files
-    cp -r "$PLUGIN_SOURCE_DIR" "$PLUGIN_TARGET_DIR"
+    echo -e "${GRAY}  Copying plugin files...${NC}"
     
-    echo -e "${GREEN}  ✓ Plugin copied successfully!${NC}"
+    # Create target directory
+    mkdir -p "$PLUGIN_TARGET_DIR"
+    
+    # Copy files, skipping locked ones
+    SKIPPED_FILES=0
+    while IFS= read -r -d '' file; do
+        rel_path="${file#$PLUGIN_SOURCE_DIR/}"
+        dest_file="$PLUGIN_TARGET_DIR/$rel_path"
+        dest_dir=$(dirname "$dest_file")
+        
+        mkdir -p "$dest_dir"
+        
+        if cp "$file" "$dest_file" 2>/dev/null; then
+            : # Success
+        else
+            if [ -f "$dest_file" ] && [ ! -w "$dest_file" ]; then
+                echo -e "${YELLOW}    Skipping locked file: $rel_path${NC}"
+                SKIPPED_FILES=$((SKIPPED_FILES + 1))
+            fi
+        fi
+    done < <(find "$PLUGIN_SOURCE_DIR" -type f -print0)
+    
+    if [ $SKIPPED_FILES -gt 0 ]; then
+        echo -e "${YELLOW}  WARNING: $SKIPPED_FILES file(s) could not be copied (locked by editor)${NC}"
+        echo -e "${YELLOW}  These will be updated when you close the editor or use Live Coding${NC}"
+        echo ""
+        echo -e "${YELLOW}  IMPORTANT: To apply locked file changes:${NC}"
+        echo -e "${YELLOW}    1. Close Unreal Editor, OR${NC}"
+        echo -e "${YELLOW}    2. Use Live Coding (Ctrl+Alt+F11) to hot-reload the plugin${NC}"
+        echo ""
+    fi
+    
+    echo -e "${GREEN}  ✓ Plugin files copied successfully!${NC}"
     
     # Save project path to config for next time
     CONFIG_FILE="$SCRIPT_ROOT/.unreal-project-path"

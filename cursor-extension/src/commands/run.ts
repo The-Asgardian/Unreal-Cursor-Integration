@@ -7,11 +7,40 @@ export function register(
     connectionManager: ConnectionManager,
     connectionState: ConnectionState
 ) {
+    // Set up run event handlers
+    const setupEventHandlers = () => {
+        if (connectionManager.isConnected) {
+            connectionManager.onEvent('run.pieStatus', (_event: string, data: { running: boolean }) => {
+                connectionState.pieRunning = data.running;
+            });
+            
+            connectionManager.onEvent('run.gameStarted', () => {
+                // Game started event
+            });
+            
+            connectionManager.onEvent('run.gameStopped', () => {
+                connectionState.pieRunning = false;
+            });
+        }
+    };
+
+    // Set up handlers when connected
+    if (connectionState.connected) {
+        setupEventHandlers();
+    } else {
+        const disposable = connectionState.onStateChanged(() => {
+            if (connectionState.connected) {
+                setupEventHandlers();
+                disposable.dispose();
+            }
+        });
+        context.subscriptions.push(disposable);
+    }
+
     context.subscriptions.push(
         vscode.commands.registerCommand('unreal.run.playPIE', async () => {
             try {
                 await connectionManager.sendRequest('run.playPIE', {});
-                connectionState.pieRunning = true;
                 vscode.window.showInformationMessage('Play In Editor started');
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to start PIE: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -23,7 +52,6 @@ export function register(
         vscode.commands.registerCommand('unreal.run.stopPIE', async () => {
             try {
                 await connectionManager.sendRequest('run.stopPIE', {});
-                connectionState.pieRunning = false;
                 vscode.window.showInformationMessage('Play In Editor stopped');
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to stop PIE: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -38,6 +66,17 @@ export function register(
                 vscode.window.showInformationMessage('Standalone game started');
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to start standalone: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+        })
+    );
+    
+    context.subscriptions.push(
+        vscode.commands.registerCommand('unreal.run.dedicatedServer', async () => {
+            try {
+                await connectionManager.sendRequest('run.dedicatedServer', {});
+                vscode.window.showInformationMessage('Dedicated server started');
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to start dedicated server: ${error instanceof Error ? error.message : 'Unknown error'}`);
             }
         })
     );
