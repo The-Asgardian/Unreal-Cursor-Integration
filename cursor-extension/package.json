@@ -1,0 +1,268 @@
+{
+  "name": "unreal-cursor-integration",
+  "displayName": "Unreal Engine Cursor Integration",
+  "description": "Deep Unreal Engine Editor integration for Cursor",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "unreal",
+          "title": "Unreal Engine",
+          "icon": "media/icons/unreal.svg"
+        }
+      ]
+    },
+    "views": {
+      "unreal": [
+        {
+          "id": "unrealTreeView",
+          "name": "Unreal Engine",
+          "when": "true"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "unreal.connect",
+        "title": "Connect",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "unreal.disconnect",
+        "title": "Disconnect",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "unreal.build.editor",
+        "title": "Build Editor",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "unreal.build.game",
+        "title": "Build Game",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "unreal.build.clean",
+        "title": "Clean",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "unreal.project.generateFiles",
+        "title": "Generate Project Files",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "unreal.intellisense.generateCompileCommands",
+        "title": "Generate compile_commands.json",
+        "icon": "$(code)"
+      },
+      {
+        "command": "unreal.liveCoding.compile",
+        "title": "Compile (Live Coding)",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "unreal.liveCoding.toggle",
+        "title": "Toggle Live Coding",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "unreal.liveCoding.restart",
+        "title": "Restart Live Coding",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "unreal.run.playPIE",
+        "title": "Play In Editor",
+        "icon": "$(play)"
+      },
+      {
+        "command": "unreal.run.stopPIE",
+        "title": "Stop PIE",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "unreal.run.standalone",
+        "title": "Run Standalone",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "unreal.logs.open",
+        "title": "Open Logs View",
+        "icon": "$(output)"
+      },
+      {
+        "command": "unreal.logs.clear",
+        "title": "Clear Logs",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "unreal.logs.setFilter",
+        "title": "Set Log Filter",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "unreal.logs.exportJson",
+        "title": "Export Logs to JSON",
+        "icon": "$(export)"
+      },
+      {
+        "command": "unreal.profiling.start",
+        "title": "Start Profiling",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "unreal.profiling.stop",
+        "title": "Stop Profiling",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "unreal.profiling.openDashboard",
+        "title": "Open Performance Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "unreal.profiling.exportSession",
+        "title": "Export Profiling Session",
+        "icon": "$(export)"
+      },
+      {
+        "command": "unreal.blueprints.exportGraphJson",
+        "title": "Export Blueprint Graph to JSON",
+        "icon": "$(export)"
+      },
+      {
+        "command": "unreal.settings.open",
+        "title": "Open Settings",
+        "icon": "$(settings-gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "unreal.connect",
+          "when": "view == unrealTreeView && !unreal.connected",
+          "group": "navigation"
+        },
+        {
+          "command": "unreal.disconnect",
+          "when": "view == unrealTreeView && unreal.connected",
+          "group": "navigation"
+        },
+        {
+          "command": "unreal.build.editor",
+          "when": "view == unrealTreeView && unreal.connected",
+          "group": "build"
+        },
+        {
+          "command": "unreal.run.playPIE",
+          "when": "view == unrealTreeView && unreal.connected",
+          "group": "run"
+        },
+        {
+          "command": "unreal.logs.open",
+          "when": "view == unrealTreeView && unreal.connected",
+          "group": "logs"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "unreal.connect",
+          "when": "view == unrealTreeView && viewItem == connectionItem",
+          "group": "inline"
+        },
+        {
+          "command": "unreal.build.editor",
+          "when": "view == unrealTreeView && viewItem == buildItem",
+          "group": "inline"
+        },
+        {
+          "command": "unreal.liveCoding.compile",
+          "when": "view == unrealTreeView && viewItem == liveCodingItem && unreal.capabilities.liveCoding",
+          "group": "inline"
+        },
+        {
+          "command": "unreal.run.playPIE",
+          "when": "view == unrealTreeView && viewItem == runItem",
+          "group": "inline"
+        },
+        {
+          "command": "unreal.logs.open",
+          "when": "view == unrealTreeView && viewItem == logsItem",
+          "group": "inline"
+        },
+        {
+          "command": "unreal.profiling.start",
+          "when": "view == unrealTreeView && viewItem == profilingItem",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Unreal Engine Integration",
+      "properties": {
+        "unreal.port": {
+          "type": "number",
+          "default": 17777,
+          "description": "WebSocket port for Unreal Engine plugin connection"
+        },
+        "unreal.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional authentication token (leave empty to disable)"
+        },
+        "unreal.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect when workspace opens"
+        },
+        "unreal.logLevel": {
+          "type": "string",
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info",
+          "description": "Logging level for extension output"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0",
+    "webpack": "^5.88.0",
+    "ts-loader": "^9.4.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0"
+  },
+  "dependencies": {
+    "uuid": "^9.0.0",
+    "ws": "^8.14.0"
+  }
+}
+
