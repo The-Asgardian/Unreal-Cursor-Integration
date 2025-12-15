@@ -191,6 +191,24 @@ export function register(
             }
         })
     );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('unreal.project.refresh', async () => {
+            try {
+                // Refresh solution - regenerate project files and refresh IntelliSense
+                await connectionManager.sendRequest('project.generateFiles', {});
+                // Optionally trigger IntelliSense refresh
+                try {
+                    await Promise.resolve(vscode.commands.executeCommand('unreal.intellisense.generateCompileCommands'));
+                } catch {
+                    // Ignore if IntelliSense command fails
+                }
+                vscode.window.showInformationMessage('Solution refreshed');
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to refresh solution: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+        })
+    );
     
     context.subscriptions.push(
         vscode.commands.registerCommand('unreal.editor.launch', async () => {
@@ -453,28 +471,176 @@ async function launchEditorAfterBuild(
         return;
     }
     
-    // Launch editor
+    // Launch editor with output capture
     if (buildOutputChannel) {
         buildOutputChannel.appendLine('=== Launching Unreal Editor ===');
+        buildOutputChannel.appendLine(`Editor Path: ${editorPath}`);
+        buildOutputChannel.appendLine(`Project: ${uprojectPath}`);
     }
-    spawn(editorPath, [uprojectPath], { detached: true, stdio: 'ignore' });
+    
+    // Capture process output (stdout and stderr) to stream to build output channel
+    // Use 'pipe' instead of 'ignore' to capture output
+    const editorProcess = spawn(editorPath, [uprojectPath], { 
+        detached: false,  // Keep attached to capture output
+        stdio: ['ignore', 'pipe', 'pipe']  // stdin: ignore, stdout: pipe, stderr: pipe
+    });
+    
+    // Stream stdout to build output channel
+    editorProcess.stdout.on('data', (data: Buffer) => {
+        if (buildOutputChannel) {
+            const lines = data.toString().split('\n');
+            for (const line of lines) {
+                if (line.trim()) {
+                    buildOutputChannel.appendLine(`[Editor] ${line.trim()}`);
+                }
+            }
+        }
+    });
+    
+    // Stream stderr to build output channel
+    editorProcess.stderr.on('data', (data: Buffer) => {
+        if (buildOutputChannel) {
+            const lines = data.toString().split('\n');
+            for (const line of lines) {
+                if (line.trim()) {
+                    buildOutputChannel.appendLine(`[Editor Error] ${line.trim()}`);
+                }
+            }
+        }
+    });
+    
+    // Handle process exit
+    editorProcess.on('exit', (code: number | null, signal: string | null) => {
+        if (buildOutputChannel) {
+            if (code === 0) {
+                buildOutputChannel.appendLine('=== Unreal Editor Process Exited Successfully ===');
+            } else {
+                buildOutputChannel.appendLine(`=== Unreal Editor Process Exited (code: ${code}, signal: ${signal}) ===`);
+            }
+        }
+    });
+    
+    // Handle process errors
+    editorProcess.on('error', (error: Error) => {
+        if (buildOutputChannel) {
+            buildOutputChannel.appendLine(`[Editor Launch Error] ${error.message}`);
+        }
+        vscode.window.showErrorMessage(`Failed to launch editor: ${error.message}`);
+    });
+    
+    // Keep process attached - don't use unref() so we stay attached for the lifetime of the process
+    // This allows us to continue capturing output and monitor the process
+    
     vscode.window.showInformationMessage('Launching Unreal Editor...');
     
-    // Auto-connect after editor starts (wait for process, then connect)
-    const { waitForUnrealEditor } = require('../utils/processDetector');
-    const outputChannel = connectionManager.outputChannel;
-    
-    outputChannel.appendLine('[Editor Launch] Waiting for Unreal Editor to start...');
-    const editorStarted = await waitForUnrealEditor(30000, 1000, outputChannel); // 30 seconds max
-    
-    if (editorStarted) {
-        outputChannel.appendLine('[Editor Launch] Editor started, connecting...');
-        // Connect once - no retry loop
-        connectionManager.connect().catch((error) => {
-            outputChannel.appendLine(`[Editor Launch] Connection error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        });
-    } else {
-        outputChannel.appendLine('[Editor Launch] Editor start timeout. You can connect manually.');
+    if (buildOutputChannel) {
+        buildOutputChannel.appendLine('=== Waiting for Unreal Editor to initialize ===');
+        buildOutputChannel.appendLine('Monitoring process output and waiting for plugin to be ready...');
     }
+    
+    // Auto-connect when editor is initialized
+    // We'll continuously try to connect until successful or process exits
+    const outputChannel = connectionManager.outputChannel;
+    outputChannel.appendLine('[Editor Launch] Waiting for Unreal Editor to initialize...');
+    
+    // Track if process has exited
+    let processExited = false;
+    
+    // Monitor process exit
+    editorProcess.on('exit', (code: number | null, signal: string | null) => {
+        processExited = true;
+        if (buildOutputChannel) {
+            if (code === 0) {
+                buildOutputChannel.appendLine('=== Unreal Editor Process Exited Successfully ===');
+            } else {
+                buildOutputChannel.appendLine(`=== Unreal Editor Process Exited (code: ${code}, signal: ${signal}) ===`);
+            }
+        }
+        
+        // Disconnect if connected
+        if (connectionState.connected) {
+            connectionManager.disconnect();
+        }
+    });
+    
+    // Function to attempt connection with retry
+    const attemptConnection = async (maxAttempts: number = 60, intervalMs: number = 2000): Promise<void> => {
+        let attempts = 0;
+        
+        while (attempts < maxAttempts && !processExited && !editorProcess.killed) {
+            attempts++;
+            
+            // Check if already connected
+            if (connectionState.connected) {
+                if (buildOutputChannel) {
+                    buildOutputChannel.appendLine('=== Already connected to Unreal Editor ===');
+                }
+                return;
+            }
+            
+            // Try to connect
+            try {
+                if (buildOutputChannel && attempts === 1) {
+                    buildOutputChannel.appendLine('=== Attempting to connect to Unreal Editor plugin... ===');
+                }
+                
+                await connectionManager.connect();
+                
+                // Connection successful
+                if (buildOutputChannel) {
+                    buildOutputChannel.appendLine('=== ✓ Connected to Unreal Editor - Logs will now stream via IPC ===');
+                }
+                outputChannel.appendLine('[Editor Launch] ✓ Successfully connected to Unreal Editor');
+                
+                // Auto-subscribe to logs once connected
+                try {
+                    await Promise.resolve(vscode.commands.executeCommand('unreal.logs.subscribe'));
+                } catch {
+                    // Ignore if subscription fails
+                }
+                
+                return;
+            } catch (error) {
+                // Connection failed, will retry
+                if (attempts % 5 === 0) { // Log every 5th attempt to reduce spam
+                    if (buildOutputChannel) {
+                        buildOutputChannel.appendLine(`[Connection Attempt ${attempts}] Waiting for plugin to be ready...`);
+                    }
+                }
+                
+                // Wait before next attempt (but check if process exited during wait)
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+                
+                // Check again if process exited during wait
+                if (processExited || editorProcess.killed) {
+                    break;
+                }
+            }
+        }
+        
+        // If we get here, either max attempts reached or process exited
+        if (!processExited && !editorProcess.killed) {
+            if (buildOutputChannel) {
+                buildOutputChannel.appendLine(`=== Connection timeout after ${maxAttempts} attempts ===`);
+                buildOutputChannel.appendLine('=== You can connect manually using the Connect button ===');
+            }
+            outputChannel.appendLine('[Editor Launch] Connection timeout. Editor may still be initializing. You can connect manually.');
+        } else if (processExited || editorProcess.killed) {
+            if (buildOutputChannel) {
+                buildOutputChannel.appendLine('=== Editor process exited before connection could be established ===');
+            }
+        }
+    };
+    
+    // Start connection attempts in background
+    attemptConnection().catch((error) => {
+        if (buildOutputChannel) {
+            buildOutputChannel.appendLine(`[Connection Error] ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        outputChannel.appendLine(`[Editor Launch] Connection error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    });
+    
+    // Note: Process exit handler is defined above in attemptConnection scope
+    // The process will stay attached and we'll continue capturing output until it exits
 }
 

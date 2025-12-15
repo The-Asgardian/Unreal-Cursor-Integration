@@ -14,7 +14,7 @@ public:
 	// Play In Editor
 	bool PlayInEditor();
 	void StopPIE();
-	bool IsPIERunning() const { return bPIERunning; }
+	bool IsPIERunning() const { return (bool)bPIERunning; }
 	
 	// Standalone game
 	bool StartStandalone();

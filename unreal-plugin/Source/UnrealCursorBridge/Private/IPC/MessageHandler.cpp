@@ -6,6 +6,10 @@
 #include "LiveCoding/LiveCodingManager.h"
 #include "Run/RunManager.h"
 #include "Logs/LogCaptureDevice.h"
+#include "UHT/UHTMetadataExtractor.h"
+#include "UHT/UHTMetadataCache.h"
+#include "Reflection/ReflectionQueryManager.h"
+#include "Reflection/BlueprintUsageTracker.h"
 #include "Dom/JsonObject.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
@@ -424,6 +428,460 @@ void MessageHandler::RegisterHandlers()
 		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
 		TArray<TSharedPtr<FJsonValue>> LogsArray;
 		Result->SetArrayField(TEXT("logs"), LogsArray);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	// UHT metadata commands
+	Server.RegisterHandler(TEXT("uht.runAndCollect"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ModuleName;
+		Request.Params->TryGetStringField(TEXT("module"), ModuleName);
+		
+		if (ModuleName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Module name required"), nullptr);
+			return;
+		}
+		
+		// Force refresh and collect metadata
+		TArray<FUHTClassMetadata> Metadata = UHTMetadataCache::Get().GetModuleMetadata(ModuleName, true);
+		
+		// Build response
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetStringField(TEXT("module"), ModuleName);
+		
+		TArray<TSharedPtr<FJsonValue>> ClassesArray;
+		for (const FUHTClassMetadata& ClassMetadata : Metadata)
+		{
+			TSharedPtr<FJsonObject> ClassObject = MakeShareable(new FJsonObject);
+			ClassObject->SetStringField(TEXT("name"), ClassMetadata.Name);
+			ClassObject->SetStringField(TEXT("super"), ClassMetadata.Super);
+			ClassObject->SetStringField(TEXT("module"), ClassMetadata.Module);
+			
+			// Metadata
+			TSharedPtr<FJsonObject> MetadataObject = MakeShareable(new FJsonObject);
+			for (const auto& Pair : ClassMetadata.Metadata)
+			{
+				MetadataObject->SetStringField(Pair.Key, Pair.Value);
+			}
+			ClassObject->SetObjectField(TEXT("metadata"), MetadataObject);
+			
+			// Properties - convert FJsonObject to FJsonValue
+			TArray<TSharedPtr<FJsonValue>> PropertiesArray;
+			for (const TSharedPtr<FJsonObject>& Prop : ClassMetadata.Properties)
+			{
+				PropertiesArray.Add(MakeShareable(new FJsonValueObject(Prop)));
+			}
+			ClassObject->SetArrayField(TEXT("properties"), PropertiesArray);
+			
+			// Functions - convert FJsonObject to FJsonValue
+			TArray<TSharedPtr<FJsonValue>> FunctionsArray;
+			for (const TSharedPtr<FJsonObject>& Func : ClassMetadata.Functions)
+			{
+				FunctionsArray.Add(MakeShareable(new FJsonValueObject(Func)));
+			}
+			ClassObject->SetArrayField(TEXT("functions"), FunctionsArray);
+			
+			ClassesArray.Add(MakeShareable(new FJsonValueObject(ClassObject)));
+		}
+		Result->SetArrayField(TEXT("classes"), ClassesArray);
+		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("uht.getReflectionSummary"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// Get summary of all modules
+		FString ProjectDir = FPaths::GetPath(FPaths::GetProjectFilePath());
+		FString IntermediateDir = FPaths::Combine(ProjectDir, TEXT("Intermediate"), TEXT("Build"));
+		
+		TArray<FString> FoundFiles;
+		IFileManager::Get().FindFilesRecursive(FoundFiles, *IntermediateDir, TEXT("*.generated.h"), true, false);
+		
+		TSet<FString> Modules;
+		for (const FString& FilePath : FoundFiles)
+		{
+			// Extract module name from path
+			FString Filename = FPaths::GetBaseFilename(FilePath);
+			// Module name is typically before the first underscore or in the path
+			int32 UnderscorePos = Filename.Find(TEXT("_"));
+			if (UnderscorePos != INDEX_NONE)
+			{
+				FString ModuleName = Filename.Left(UnderscorePos);
+				if (!ModuleName.IsEmpty())
+				{
+					Modules.Add(ModuleName);
+				}
+			}
+		}
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		TArray<TSharedPtr<FJsonValue>> ModulesArray;
+		for (const FString& Module : Modules)
+		{
+			ModulesArray.Add(MakeShareable(new FJsonValueString(Module)));
+		}
+		Result->SetArrayField(TEXT("modules"), ModulesArray);
+		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("uht.getClassMetadata"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ModuleName, ClassName;
+		Request.Params->TryGetStringField(TEXT("module"), ModuleName);
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		
+		if (ModuleName.IsEmpty() || ClassName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Module name and class name required"), nullptr);
+			return;
+		}
+		
+		FUHTClassMetadata ClassMetadata;
+		if (!UHTMetadataCache::Get().GetClassMetadata(ModuleName, ClassName, ClassMetadata))
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Class not found"), nullptr);
+			return;
+		}
+		
+		// Build response
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetStringField(TEXT("name"), ClassMetadata.Name);
+		Result->SetStringField(TEXT("super"), ClassMetadata.Super);
+		Result->SetStringField(TEXT("module"), ClassMetadata.Module);
+		
+		// Metadata
+		TSharedPtr<FJsonObject> MetadataObject = MakeShareable(new FJsonObject);
+		for (const auto& Pair : ClassMetadata.Metadata)
+		{
+			MetadataObject->SetStringField(Pair.Key, Pair.Value);
+		}
+		Result->SetObjectField(TEXT("metadata"), MetadataObject);
+		
+		// Properties - convert FJsonObject to FJsonValue
+		TArray<TSharedPtr<FJsonValue>> PropertiesArray;
+		for (const TSharedPtr<FJsonObject>& Prop : ClassMetadata.Properties)
+		{
+			PropertiesArray.Add(MakeShareable(new FJsonValueObject(Prop)));
+		}
+		Result->SetArrayField(TEXT("properties"), PropertiesArray);
+		
+		// Functions - convert FJsonObject to FJsonValue
+		TArray<TSharedPtr<FJsonValue>> FunctionsArray;
+		for (const TSharedPtr<FJsonObject>& Func : ClassMetadata.Functions)
+		{
+			FunctionsArray.Add(MakeShareable(new FJsonValueObject(Func)));
+		}
+		Result->SetArrayField(TEXT("functions"), FunctionsArray);
+		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("uht.getFunctionMetadata"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ModuleName, ClassName, FunctionName;
+		Request.Params->TryGetStringField(TEXT("module"), ModuleName);
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		Request.Params->TryGetStringField(TEXT("functionName"), FunctionName);
+		
+		if (ModuleName.IsEmpty() || ClassName.IsEmpty() || FunctionName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Module name, class name, and function name required"), nullptr);
+			return;
+		}
+		
+		FUHTClassMetadata ClassMetadata;
+		if (!UHTMetadataCache::Get().GetClassMetadata(ModuleName, ClassName, ClassMetadata))
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Class not found"), nullptr);
+			return;
+		}
+		
+		// Find function
+		TSharedPtr<FJsonObject> FunctionMetadata;
+		for (const TSharedPtr<FJsonObject>& Func : ClassMetadata.Functions)
+		{
+			FString FuncName;
+			if (Func->TryGetStringField(TEXT("name"), FuncName) && FuncName == FunctionName)
+			{
+				FunctionMetadata = Func;
+				break;
+			}
+		}
+		
+		if (!FunctionMetadata.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Function not found"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> Result = FunctionMetadata;
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("uht.getPropertyMetadata"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ModuleName, ClassName, PropertyName;
+		Request.Params->TryGetStringField(TEXT("module"), ModuleName);
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		Request.Params->TryGetStringField(TEXT("propertyName"), PropertyName);
+		
+		if (ModuleName.IsEmpty() || ClassName.IsEmpty() || PropertyName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Module name, class name, and property name required"), nullptr);
+			return;
+		}
+		
+		FUHTClassMetadata ClassMetadata;
+		if (!UHTMetadataCache::Get().GetClassMetadata(ModuleName, ClassName, ClassMetadata))
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Class not found"), nullptr);
+			return;
+		}
+		
+		// Find property
+		TSharedPtr<FJsonObject> PropertyMetadata;
+		for (const TSharedPtr<FJsonObject>& Prop : ClassMetadata.Properties)
+		{
+			FString PropName;
+			if (Prop->TryGetStringField(TEXT("name"), PropName) && PropName == PropertyName)
+			{
+				PropertyMetadata = Prop;
+				break;
+			}
+		}
+		
+		if (!PropertyMetadata.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Property not found"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> Result = PropertyMetadata;
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	// Reflection commands
+	Server.RegisterHandler(TEXT("reflection.listClasses"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		TArray<FString> ClassNames = ReflectionQueryManager::Get().ListClasses();
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		TArray<TSharedPtr<FJsonValue>> ClassesArray;
+		for (const FString& ClassName : ClassNames)
+		{
+			ClassesArray.Add(MakeShareable(new FJsonValueString(ClassName)));
+		}
+		Result->SetArrayField(TEXT("classes"), ClassesArray);
+		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("reflection.getClass"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ClassName;
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		
+		if (ClassName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Class name required"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> ClassJson = ReflectionQueryManager::Get().GetClass(ClassName);
+		if (!ClassJson.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Class not found"), nullptr);
+			return;
+		}
+		
+		IPCServer::Get().SendResponse(Request.Id, ClassJson, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("reflection.getFunctions"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ClassName;
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		
+		if (ClassName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Class name required"), nullptr);
+			return;
+		}
+		
+		TArray<TSharedPtr<FJsonObject>> Functions = ReflectionQueryManager::Get().GetFunctions(ClassName);
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		TArray<TSharedPtr<FJsonValue>> FunctionsArray;
+		for (const TSharedPtr<FJsonObject>& Func : Functions)
+		{
+			FunctionsArray.Add(MakeShareable(new FJsonValueObject(Func)));
+		}
+		Result->SetArrayField(TEXT("functions"), FunctionsArray);
+		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("reflection.getProperties"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ClassName;
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		
+		if (ClassName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Class name required"), nullptr);
+			return;
+		}
+		
+		TArray<TSharedPtr<FJsonObject>> Properties = ReflectionQueryManager::Get().GetProperties(ClassName);
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		TArray<TSharedPtr<FJsonValue>> PropertiesArray;
+		for (const TSharedPtr<FJsonObject>& Prop : Properties)
+		{
+			PropertiesArray.Add(MakeShareable(new FJsonValueObject(Prop)));
+		}
+		Result->SetArrayField(TEXT("properties"), PropertiesArray);
+		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("reflection.findSymbol"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString SymbolName;
+		Request.Params->TryGetStringField(TEXT("symbolName"), SymbolName);
+		
+		if (SymbolName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Symbol name required"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> SymbolJson = ReflectionQueryManager::Get().FindSymbol(SymbolName);
+		if (!SymbolJson.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Symbol not found"), nullptr);
+			return;
+		}
+		
+		IPCServer::Get().SendResponse(Request.Id, SymbolJson, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("reflection.getCDODefaults"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString ClassName;
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		
+		if (ClassName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Class name required"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> CDOJson = ReflectionQueryManager::Get().GetCDODefaults(ClassName);
+		if (!CDOJson.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("NOT_FOUND"), TEXT("Class not found or no CDO"), nullptr);
+			return;
+		}
+		
+		IPCServer::Get().SendResponse(Request.Id, CDOJson, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("reflection.getUsageData"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString SymbolName, ClassName;
+		Request.Params->TryGetStringField(TEXT("symbolName"), SymbolName);
+		Request.Params->TryGetStringField(TEXT("className"), ClassName);
+		
+		if (SymbolName.IsEmpty() || ClassName.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Symbol name and class name required"), nullptr);
+			return;
+		}
+		
+		FBlueprintUsageInfo UsageInfo = BlueprintUsageTracker::Get().GetUsageData(SymbolName, ClassName);
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetStringField(TEXT("symbolName"), SymbolName);
+		Result->SetStringField(TEXT("className"), ClassName);
+		Result->SetNumberField(TEXT("usageCount"), UsageInfo.UsageCount);
+		
+		TArray<TSharedPtr<FJsonValue>> UsedInArray;
+		for (const FString& BlueprintPath : UsageInfo.UsedInBlueprints)
+		{
+			UsedInArray.Add(MakeShareable(new FJsonValueString(BlueprintPath)));
+		}
+		Result->SetArrayField(TEXT("usedInBlueprints"), UsedInArray);
+		
+		TArray<TSharedPtr<FJsonValue>> OverriddenInArray;
+		for (const FString& BlueprintPath : UsageInfo.OverriddenInBlueprints)
+		{
+			OverriddenInArray.Add(MakeShareable(new FJsonValueString(BlueprintPath)));
+		}
+		Result->SetArrayField(TEXT("overriddenInBlueprints"), OverriddenInArray);
+		
 		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
 	}));
 }

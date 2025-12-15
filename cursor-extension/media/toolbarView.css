@@ -1,0 +1,150 @@
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--vscode-font-family);
+    background-color: var(--vscode-sideBar-background);
+}
+
+.toolbar-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 4px;
+    gap: 4px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.toolbar-button {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 4px;
+    position: relative;
+    transition: background-color 0.2s, color 0.2s;
+    background-color: transparent;
+    color: var(--vscode-icon-foreground);
+    border: 1px solid transparent;
+}
+
+.toolbar-button:hover {
+    background-color: var(--vscode-toolbar-hoverBackground);
+    color: var(--vscode-icon-foreground);
+}
+
+.toolbar-button.active {
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: var(--vscode-button-border);
+}
+
+.toolbar-button.active:hover {
+    background-color: var(--vscode-button-hoverBackground);
+}
+
+.toolbar-button.running {
+    background-color: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+}
+
+.toolbar-button.running:hover {
+    background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+.toolbar-button.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.toolbar-button .codicon {
+    font-size: 16px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+}
+
+.toolbar-button.dropdown {
+    position: relative;
+}
+
+.toolbar-button.dropdown .dropdown-arrow {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    font-size: 10px;
+    opacity: 0.7;
+    width: 10px;
+    height: 10px;
+}
+
+/* Tooltip styles */
+.toolbar-button[title]:hover::after {
+    content: attr(title);
+    position: absolute;
+    left: 100%;
+    margin-left: 8px;
+    padding: 4px 8px;
+    background-color: var(--vscode-editorWidget-background);
+    color: var(--vscode-editorWidget-foreground);
+    border: 1px solid var(--vscode-editorWidget-border);
+    border-radius: 4px;
+    white-space: nowrap;
+    z-index: 1000;
+    font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+}
+
+/* Build button specific styling */
+.toolbar-button#buildBtn.building {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+/* PIE running indicator */
+.toolbar-button#playBtn.running,
+.toolbar-button#runBtn.running {
+    background-color: rgba(0, 200, 0, 0.2);
+    color: var(--vscode-button-foreground);
+}
+
+.toolbar-button#playBtn.running:hover,
+.toolbar-button#runBtn.running:hover {
+    background-color: rgba(0, 200, 0, 0.3);
+}
+
+/* Pause button active state */
+.toolbar-button#pauseBtn.active {
+    background-color: rgba(255, 200, 0, 0.2);
+    color: var(--vscode-button-foreground);
+}
+
+.toolbar-button#pauseBtn.active:hover {
+    background-color: rgba(255, 200, 0, 0.3);
+}
+
+/* Debug button active state */
+.toolbar-button#debugBtn.active {
+    background-color: rgba(0, 150, 255, 0.2);
+    color: var(--vscode-button-foreground);
+}
+
+.toolbar-button#debugBtn.active:hover {
+    background-color: rgba(0, 150, 255, 0.3);
+}
+

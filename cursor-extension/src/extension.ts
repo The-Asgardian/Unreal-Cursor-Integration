@@ -13,8 +13,14 @@ import * as intellisenseCommands from './commands/intellisense';
 import * as testConnectionCommands from './commands/testConnection';
 import * as debugCommands from './commands/debug';
 import { BuildViewProvider } from './ui/webviews/buildView';
+import { ToolbarViewProvider } from './ui/webviews/toolbarView';
 import { detectUnrealProject, hasUnrealProject } from './utils/projectDetector';
 import { isUnrealEditorRunning } from './utils/processDetector';
+import { UnrealHoverProvider } from './providers/unrealHoverProvider';
+import { UnrealDiagnosticsProvider } from './providers/unrealDiagnosticsProvider';
+import { UnrealCompletionProvider } from './providers/unrealCompletionProvider';
+import { UnrealCodeLensProvider } from './providers/unrealCodeLensProvider';
+import { UnrealInlayHintsProvider } from './providers/unrealInlayHintsProvider';
 
 let connectionManager: ConnectionManager | undefined;
 let treeDataProvider: UnrealTreeDataProvider | undefined;
@@ -57,6 +63,24 @@ export function activate(context: vscode.ExtensionContext) {
             console.error('Failed to register tree view:', error);
             vscode.window.showErrorMessage(`Failed to register tree view: ${error instanceof Error ? error.message : 'Unknown error'}`);
             throw error;
+        }
+
+        // Register toolbar view
+        try {
+            const toolbarViewProvider = new ToolbarViewProvider(
+                context.extensionUri,
+                connectionManager,
+                connectionState
+            );
+            context.subscriptions.push(
+                vscode.window.registerWebviewViewProvider(
+                    ToolbarViewProvider.viewType,
+                    toolbarViewProvider
+                )
+            );
+        } catch (error) {
+            console.error('Failed to register toolbar view:', error);
+            vscode.window.showErrorMessage(`Failed to register toolbar view: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
 
         // Register build view
@@ -247,6 +271,53 @@ function registerCommands(
             intellisenseCommands.register(context, connectionManager, connectionState);
         } catch (error) {
             console.error('Failed to register intellisense commands:', error);
+        }
+        
+        // Register IntelliSense providers
+        try {
+            // Hover provider
+            const hoverProvider = new UnrealHoverProvider(connectionManager, connectionState);
+            context.subscriptions.push(
+                vscode.languages.registerHoverProvider('cpp', hoverProvider)
+            );
+            
+            // Diagnostics provider
+            const diagnosticsProvider = new UnrealDiagnosticsProvider(connectionManager, connectionState);
+            context.subscriptions.push(diagnosticsProvider);
+            
+            // Watch for document changes to update diagnostics
+            context.subscriptions.push(
+                vscode.workspace.onDidChangeTextDocument((e) => {
+                    diagnosticsProvider.validateDocument(e.document);
+                })
+            );
+            
+            // Validate all open documents on activation
+            vscode.workspace.textDocuments.forEach((doc) => {
+                if (doc.languageId === 'cpp') {
+                    diagnosticsProvider.validateDocument(doc);
+                }
+            });
+            
+            // Completion provider
+            const completionProvider = new UnrealCompletionProvider(connectionManager, connectionState);
+            context.subscriptions.push(
+                vscode.languages.registerCompletionItemProvider('cpp', completionProvider, '.')
+            );
+            
+            // CodeLens provider
+            const codeLensProvider = new UnrealCodeLensProvider(connectionManager, connectionState);
+            context.subscriptions.push(
+                vscode.languages.registerCodeLensProvider('cpp', codeLensProvider)
+            );
+            
+            // Inlay hints provider
+            const inlayHintsProvider = new UnrealInlayHintsProvider(connectionManager, connectionState);
+            context.subscriptions.push(
+                vscode.languages.registerInlayHintsProvider('cpp', inlayHintsProvider)
+            );
+        } catch (error) {
+            console.error('Failed to register IntelliSense providers:', error);
         }
         
         // Debug commands

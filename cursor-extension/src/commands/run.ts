@@ -20,6 +20,11 @@ export function register(
             
             connectionManager.onEvent('run.gameStopped', () => {
                 connectionState.pieRunning = false;
+                connectionState.piePaused = false;
+            });
+            
+            connectionManager.onEvent('run.piePaused', (_event: string, data: { paused: boolean }) => {
+                connectionState.piePaused = data.paused;
             });
         }
     };
@@ -77,6 +82,19 @@ export function register(
                 vscode.window.showInformationMessage('Dedicated server started');
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to start dedicated server: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('unreal.run.pausePIE', async () => {
+            try {
+                const isPaused = connectionState.piePaused;
+                await connectionManager.sendRequest('run.pausePIE', { pause: !isPaused });
+                connectionState.piePaused = !isPaused;
+                vscode.window.showInformationMessage(isPaused ? 'Play In Editor resumed' : 'Play In Editor paused');
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to ${connectionState.piePaused ? 'resume' : 'pause'} PIE: ${error instanceof Error ? error.message : 'Unknown error'}`);
             }
         })
     );

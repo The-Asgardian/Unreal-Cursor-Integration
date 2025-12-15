@@ -24,6 +24,7 @@ export class ConnectionState {
     private _liveCodingEnabled: boolean = false;
     private _liveCodingCompiling: boolean = false;
     private _pieRunning: boolean = false;
+    private _piePaused: boolean = false;
     private _profilingActive: boolean = false;
     
     private _onStateChangedEmitter = new vscode.EventEmitter<void>();
@@ -111,6 +112,21 @@ export class ConnectionState {
     set pieRunning(value: boolean) {
         if (this._pieRunning !== value) {
             this._pieRunning = value;
+            if (!value) {
+                // Reset pause state when PIE stops
+                this._piePaused = false;
+            }
+            this._onStateChangedEmitter.fire();
+        }
+    }
+    
+    get piePaused(): boolean {
+        return this._piePaused;
+    }
+    
+    set piePaused(value: boolean) {
+        if (this._piePaused !== value) {
+            this._piePaused = value;
             this._onStateChangedEmitter.fire();
         }
     }

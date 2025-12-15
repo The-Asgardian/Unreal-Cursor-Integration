@@ -11,10 +11,10 @@
 #include "PlayInEditorDataTypes.h"
 
 RunManager::RunManager()
-	: bPIERunning(false)
-	, bStandaloneRunning(false)
-	, bDedicatedServerRunning(false)
 {
+	bPIERunning = false;
+	bStandaloneRunning = false;
+	bDedicatedServerRunning = false;
 }
 
 RunManager::~RunManager()

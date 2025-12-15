@@ -32,6 +32,11 @@
     "views": {
       "unreal": [
         {
+          "id": "unrealToolbarView",
+          "name": "Toolbar",
+          "when": "true"
+        },
+        {
           "id": "unrealTreeView",
           "name": "Unreal Engine",
           "when": "true"
@@ -103,6 +108,16 @@
         "command": "unreal.run.stopPIE",
         "title": "Stop PIE",
         "icon": "$(stop)"
+      },
+      {
+        "command": "unreal.run.pausePIE",
+        "title": "Pause PIE",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "unreal.project.refresh",
+        "title": "Refresh Solution",
+        "icon": "$(refresh)"
       },
       {
         "command": "unreal.run.standalone",
@@ -206,63 +221,6 @@
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "command": "unreal.connect",
-          "when": "view == unrealTreeView && !unreal.connected",
-          "group": "navigation"
-        },
-        {
-          "command": "unreal.disconnect",
-          "when": "view == unrealTreeView && unreal.connected",
-          "group": "navigation"
-        },
-        {
-          "command": "unreal.editor.launch",
-          "when": "view == unrealTreeView",
-          "group": "1_build@1"
-        },
-        {
-          "command": "unreal.build.editor",
-          "when": "view == unrealTreeView && unreal.connected && !unreal.buildInProgress",
-          "group": "1_build@2"
-        },
-        {
-          "command": "unreal.build.rebuild",
-          "when": "view == unrealTreeView && unreal.connected && !unreal.buildInProgress",
-          "group": "1_build@3"
-        },
-        {
-          "command": "unreal.build.clean",
-          "when": "view == unrealTreeView && unreal.connected && !unreal.buildInProgress",
-          "group": "1_build@4"
-        },
-        {
-          "command": "unreal.build.cancel",
-          "when": "view == unrealTreeView && unreal.connected && unreal.buildInProgress",
-          "group": "1_build@5"
-        },
-        {
-          "command": "unreal.liveCoding.compile",
-          "when": "view == unrealTreeView && unreal.connected && unreal.capabilities.liveCoding && !unreal.liveCodingCompiling",
-          "group": "2_livecode@1"
-        },
-        {
-          "command": "unreal.run.playPIE",
-          "when": "view == unrealTreeView && unreal.connected && !unreal.pieRunning",
-          "group": "3_run@1"
-        },
-        {
-          "command": "unreal.run.stopPIE",
-          "when": "view == unrealTreeView && unreal.connected && unreal.pieRunning",
-          "group": "3_run@2"
-        },
-        {
-          "command": "unreal.debug.start",
-          "when": "view == unrealTreeView && unreal.connected && !unreal.pieRunning",
-          "group": "3_run@3"
-        }
-      ],
       "commandPalette": [
         {
           "command": "unreal.editor.launch",

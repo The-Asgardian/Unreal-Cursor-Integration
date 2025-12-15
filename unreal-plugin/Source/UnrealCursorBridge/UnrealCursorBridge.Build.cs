@@ -35,11 +35,14 @@ public class UnrealCursorBridge : ModuleRules
 			new string[]
 			{
 				"AssetTools",
+				"AssetRegistry",
 				"LiveCoding",
 				"UnrealEd",
 				"ToolMenus",
 				"Json",
-				"JsonUtilities"
+				"JsonUtilities",
+				"Settings",
+				"KismetCompiler"
 			}
 		);
 		

@@ -157,9 +157,12 @@ async function autoSubscribe(connectionManager: ConnectionManager): Promise<void
         });
         isSubscribed = true;
         const buildOutputChannel = getBuildOutputChannel();
+        buildOutputChannel.appendLine('=== Subscribed to Unreal Editor logs via IPC ===');
         buildOutputChannel.show(true);
     } catch (error) {
         // Ignore errors
+        const buildOutputChannel = getBuildOutputChannel();
+        buildOutputChannel.appendLine(`[Warning] Failed to subscribe to logs: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
 }
 
