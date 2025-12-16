@@ -223,6 +223,11 @@
         "command": "unreal.logs.unsubscribe",
         "title": "Unsubscribe from Logs",
         "icon": "$(output)"
+      },
+      {
+        "command": "unreal.paths.configure",
+        "title": "Configure Unreal Engine Paths",
+        "icon": "$(settings-gear)"
       }
     ],
     "menus": {
@@ -323,6 +328,21 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically regenerate compile_commands.json when C++ files are added or modified"
+        },
+        "unreal.engineRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Manual override: Path to Unreal Engine root directory (e.g., C:\\Program Files\\Epic Games\\UE_5.6\\Engine). Leave empty for auto-detection."
+        },
+        "unreal.buildToolPath": {
+          "type": "string",
+          "default": "",
+          "description": "Manual override: Path to UnrealBuildTool executable. Leave empty for auto-detection."
+        },
+        "unreal.editorPath": {
+          "type": "string",
+          "default": "",
+          "description": "Manual override: Path to UnrealEditor executable. Leave empty for auto-detection."
         }
       }
     }

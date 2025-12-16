@@ -12,10 +12,12 @@ import * as assetsCommands from './commands/assets';
 import * as intellisenseCommands from './commands/intellisense';
 import * as testConnectionCommands from './commands/testConnection';
 import * as debugCommands from './commands/debug';
+import * as pathsCommands from './commands/paths';
 import { BuildViewProvider } from './ui/webviews/buildView';
 import { ToolbarViewProvider } from './ui/webviews/toolbarView';
 import { detectUnrealProject, hasUnrealProject } from './utils/projectDetector';
 import { isUnrealEditorRunning } from './utils/processDetector';
+import { UnrealPathDetector } from './utils/unrealPathDetector';
 import { UnrealHoverProvider } from './providers/unrealHoverProvider';
 import { UnrealDiagnosticsProvider } from './providers/unrealDiagnosticsProvider';
 import { UnrealCompletionProvider } from './providers/unrealCompletionProvider';
@@ -115,6 +117,46 @@ export function activate(context: vscode.ExtensionContext) {
         // Get output channel for logging
         const outputChannel = connectionManager.outputChannel;
         
+        // Initialize path detection and validate required tools (async, non-blocking)
+        outputChannel.appendLine('[Extension] Initializing Unreal Engine path detection...');
+        (async () => {
+            try {
+                const paths = await UnrealPathDetector.getPaths(outputChannel);
+                
+                // Validate paths (warn but don't fail if not found - user might configure later)
+                const buildToolValidation = UnrealPathDetector.validatePaths(paths, true, false);
+                const editorValidation = UnrealPathDetector.validatePaths(paths, false, true);
+                
+                if (!buildToolValidation.valid) {
+                    outputChannel.appendLine(`[Extension] ⚠ Warning: UnrealBuildTool not found. Missing: ${buildToolValidation.missing.join(', ')}`);
+                    outputChannel.appendLine('[Extension] You can configure the path manually using: unreal.paths.configure');
+                    
+                    // Show notification but don't block activation
+                    vscode.window.showWarningMessage(
+                        'UnrealBuildTool not found. Some features may not work. Configure path?',
+                        'Configure Now',
+                        'Later'
+                    ).then(choice => {
+                        if (choice === 'Configure Now') {
+                            vscode.commands.executeCommand('unreal.paths.configure');
+                        }
+                    });
+                }
+                
+                if (!editorValidation.valid) {
+                    outputChannel.appendLine(`[Extension] ⚠ Warning: UnrealEditor not found. Missing: ${editorValidation.missing.join(', ')}`);
+                    outputChannel.appendLine('[Extension] You can configure the path manually using: unreal.paths.configure');
+                }
+                
+                if (buildToolValidation.valid && editorValidation.valid) {
+                    outputChannel.appendLine('[Extension] ✓ All required Unreal Engine tools detected');
+                }
+            } catch (error) {
+                outputChannel.appendLine(`[Extension] Error during path detection: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                // Don't fail activation, just log the error
+            }
+        })();
+        
         // Auto-connect if Unreal project is detected
         outputChannel.appendLine('[Extension] Checking for Unreal Engine project...');
         const hasProject = hasUnrealProject(outputChannel);
@@ -187,6 +229,21 @@ export function activate(context: vscode.ExtensionContext) {
                         outputChannel.appendLine(`[Extension] Auto-connect error: ${error instanceof Error ? error.message : 'Unknown error'}`);
                         console.error('Auto-connect failed:', error);
                     });
+                }
+            })
+        );
+
+        // Watch for configuration changes to clear path cache
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeConfiguration((e) => {
+                if (e.affectsConfiguration('unreal.engineRoot') || 
+                    e.affectsConfiguration('unreal.buildToolPath') || 
+                    e.affectsConfiguration('unreal.editorPath')) {
+                    UnrealPathDetector.clearCache();
+                    if (connectionManager) {
+                        const outputChannel = connectionManager.outputChannel;
+                        outputChannel.appendLine('[Extension] Unreal Engine path configuration changed, cache cleared');
+                    }
                 }
             })
         );
@@ -332,6 +389,13 @@ function registerCommands(
             testConnectionCommands.register(context, connectionManager, connectionState);
         } catch (error) {
             console.error('Failed to register test connection command:', error);
+        }
+        
+        // Path configuration commands
+        try {
+            pathsCommands.register(context, connectionManager, connectionState);
+        } catch (error) {
+            console.error('Failed to register path configuration commands:', error);
         }
         
         // Settings command

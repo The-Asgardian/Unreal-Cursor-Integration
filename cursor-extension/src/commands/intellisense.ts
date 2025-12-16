@@ -130,7 +130,7 @@ export function register(
             // Notify clangd to reload compile_commands.json
             // clangd should automatically detect file changes, but we can also trigger a reload
             try {
-                vscode.commands.executeCommand('clangd.restart').catch(() => {
+                Promise.resolve(vscode.commands.executeCommand('clangd.restart')).catch(() => {
                     // clangd extension might not be installed, ignore
                 });
             } catch {

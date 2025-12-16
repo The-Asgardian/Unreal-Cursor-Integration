@@ -3,6 +3,7 @@ import { ConnectionManager } from '../ipc/connectionManager';
 import { ConnectionState } from '../state/connectionState';
 import { BuildStartRequest } from '../ipc/protocol';
 import { BuildDiagnosticsManager, BuildDiagnostic } from '../diagnostics/buildDiagnostics';
+import { UnrealPathDetector } from '../utils/unrealPathDetector';
 
 let buildDiagnosticsManager: BuildDiagnosticsManager | undefined;
 let buildOutputChannel: vscode.OutputChannel | undefined;
@@ -349,30 +350,46 @@ async function buildEditorLocally(
     uprojectPath: string,
     outputChannel: vscode.OutputChannel
 ): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
         const fs = require('fs');
         const path = require('path');
         const { spawn } = require('child_process');
         
-        // Find UBT
-        let ubtPath = '';
+        // Find UBT using path detector
+        outputChannel.appendLine('[Build] Detecting UnrealBuildTool...');
+        const paths = await UnrealPathDetector.getPaths(outputChannel);
+        
+        if (!paths.buildToolPath) {
+            const validation = UnrealPathDetector.validatePaths(paths, true, false);
+            if (!validation.valid) {
+                outputChannel.appendLine(`[Build] ✗ UnrealBuildTool not found. Missing: ${validation.missing.join(', ')}`);
+                outputChannel.appendLine('[Build] Please configure the path manually using: unreal.paths.configure');
+                
+                const configureChoice = await vscode.window.showErrorMessage(
+                    'UnrealBuildTool not found. Would you like to configure the path manually?',
+                    'Configure Path',
+                    'Cancel'
+                );
+                
+                if (configureChoice === 'Configure Path') {
+                    await vscode.commands.executeCommand('unreal.paths.configure');
+                    // Retry detection after configuration
+                    UnrealPathDetector.clearCache();
+                    const newPaths = await UnrealPathDetector.getPaths(outputChannel);
+                    if (!newPaths.buildToolPath) {
+                        reject(new Error('UnrealBuildTool not found. Please configure the path in settings.'));
+                        return;
+                    }
+                    paths.buildToolPath = newPaths.buildToolPath;
+                } else {
+                    reject(new Error('UnrealBuildTool not found. Please configure the path in settings (unreal.buildToolPath).'));
+                    return;
+                }
+            }
+        }
+        
+        const ubtPath = paths.buildToolPath!;
         const projectDir = path.dirname(uprojectPath);
-        
-        // Try to find engine from .uproject file or common locations
-        if (process.platform === 'win32') {
-            const possiblePaths = [
-                'C:\\Program Files\\Epic Games\\UE_5.6\\Engine\\Binaries\\DotNET\\UnrealBuildTool\\UnrealBuildTool.exe',
-                'C:\\Program Files\\Epic Games\\UE_5.5\\Engine\\Binaries\\DotNET\\UnrealBuildTool\\UnrealBuildTool.exe',
-                'C:\\Program Files\\Epic Games\\UE_5.4\\Engine\\Binaries\\DotNET\\UnrealBuildTool\\UnrealBuildTool.exe',
-            ];
-            
-            ubtPath = possiblePaths.find((p: string) => fs.existsSync(p)) || '';
-        }
-        
-        if (!ubtPath) {
-            reject(new Error('UnrealBuildTool not found. Please build from Unreal Editor.'));
-            return;
-        }
         
         // Build command: ProjectNameEditor Win64 Development -project="path"
         // For project builds, the target is ProjectNameEditor, not just Editor
@@ -436,38 +453,59 @@ async function launchEditorAfterBuild(
     const fs = require('fs');
     const { spawn } = require('child_process');
     
-    let editorPath: string;
+    // Detect editor path using path detector
+    const outputChannel = connectionManager.outputChannel;
+    outputChannel.appendLine('[Editor Launch] Detecting UnrealEditor...');
+    const paths = await UnrealPathDetector.getPaths(outputChannel);
     
-    if (process.platform === 'win32') {
-        // Try to find UnrealEditor.exe
-        const possiblePaths = [
-            'C:\\Program Files\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor.exe',
-            'C:\\Program Files\\Epic Games\\UE_5.5\\Engine\\Binaries\\Win64\\UnrealEditor.exe',
-            'C:\\Program Files\\Epic Games\\UE_5.4\\Engine\\Binaries\\Win64\\UnrealEditor.exe',
-        ];
-        
-        editorPath = possiblePaths.find((p: string) => fs.existsSync(p)) || '';
-        
-        if (!editorPath) {
-            const choice = await vscode.window.showInputBox({
-                prompt: 'Enter path to UnrealEditor.exe',
-                placeHolder: 'C:\\Program Files\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor.exe'
-            });
+    let editorPath = paths.editorPath;
+    
+    if (!editorPath) {
+        const validation = UnrealPathDetector.validatePaths(paths, false, true);
+        if (!validation.valid) {
+            outputChannel.appendLine(`[Editor Launch] ✗ UnrealEditor not found. Missing: ${validation.missing.join(', ')}`);
+            outputChannel.appendLine('[Editor Launch] Please configure the path manually using: unreal.paths.configure');
             
-            if (choice) {
-                editorPath = choice;
+            const configureChoice = await vscode.window.showErrorMessage(
+                'UnrealEditor not found. Would you like to configure the path manually?',
+                'Configure Path',
+                'Cancel'
+            );
+            
+            if (configureChoice === 'Configure Path') {
+                await vscode.commands.executeCommand('unreal.paths.configure');
+                // Retry detection after configuration
+                UnrealPathDetector.clearCache();
+                const newPaths = await UnrealPathDetector.getPaths(outputChannel);
+                if (!newPaths.editorPath) {
+                    // Fallback to manual input
+                    const choice = await vscode.window.showInputBox({
+                        prompt: 'Enter path to UnrealEditor executable',
+                        placeHolder: process.platform === 'win32' 
+                            ? 'C:\\Program Files\\Epic Games\\UE_5.6\\Engine\\Binaries\\Win64\\UnrealEditor.exe'
+                            : process.platform === 'darwin'
+                            ? '/Applications/Unreal Engine/UE_5.6/UnrealEditor.app/Contents/MacOS/UnrealEditor'
+                            : '~/UnrealEngine/Engine/Binaries/Linux/UnrealEditor'
+                    });
+                    
+                    if (choice && fs.existsSync(choice)) {
+                        editorPath = choice;
+                    } else {
+                        vscode.window.showErrorMessage('Unreal Editor not found. Please configure the path in settings (unreal.editorPath).');
+                        return;
+                    }
+                } else {
+                    editorPath = newPaths.editorPath;
+                }
             } else {
+                vscode.window.showErrorMessage('Unreal Editor not found. Please configure the path in settings (unreal.editorPath).');
                 return;
             }
         }
-    } else if (process.platform === 'darwin') {
-        editorPath = '/Applications/Unreal Engine/UE_5.6/UnrealEditor.app/Contents/MacOS/UnrealEditor';
-    } else {
-        editorPath = '';
     }
     
     if (!editorPath || !fs.existsSync(editorPath)) {
-        vscode.window.showErrorMessage(`Unreal Editor not found. Please specify the path to UnrealEditor.`);
+        vscode.window.showErrorMessage(`Unreal Editor not found at: ${editorPath || 'unknown'}. Please configure the path in settings (unreal.editorPath).`);
         return;
     }
     
@@ -540,7 +578,7 @@ async function launchEditorAfterBuild(
     
     // Auto-connect when editor is initialized
     // We'll continuously try to connect until successful or process exits
-    const outputChannel = connectionManager.outputChannel;
+    // (outputChannel already declared above)
     outputChannel.appendLine('[Editor Launch] Waiting for Unreal Editor to initialize...');
     
     // Track if process has exited
