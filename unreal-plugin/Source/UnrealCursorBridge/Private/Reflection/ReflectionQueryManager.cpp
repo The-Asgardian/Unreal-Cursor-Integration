@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Reflection/ReflectionQueryManager.h"
+#include "IPC/IPCServer.h"
 #include "UObject/UObjectIterator.h"
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
@@ -11,11 +12,426 @@
 #include "Serialization/JsonSerializer.h"
 #include "Engine/Engine.h"
 #include "HAL/PlatformProcess.h"
+#include "Misc/DateTime.h"
+#include "Misc/Timespan.h"
+#include "Async/Async.h"
+
+ReflectionQueryManager::ReflectionQueryManager()
+	: bCacheReady(false)
+	, bCacheBuilding(false)
+{
+}
+
+ReflectionQueryManager::~ReflectionQueryManager()
+{
+	// Save cache on shutdown
+	if (bCacheReady)
+	{
+		SaveCacheToDisk();
+	}
+}
 
 ReflectionQueryManager& ReflectionQueryManager::Get()
 {
 	static ReflectionQueryManager Instance;
 	return Instance;
+}
+
+void ReflectionQueryManager::InitializeCache()
+{
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] InitializeCache called"));
+	
+	// Try to load from disk first
+	if (LoadCacheFromDisk())
+	{
+		UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Cache loaded from disk successfully"));
+		bCacheReady = true;
+		
+		// Emit cache ready event so extension knows cache is available
+		FScopeLock Lock(&CacheLock);
+		int32 ClassCount = ClassCache.Num();
+		int32 SymbolCount = SymbolCache.Num();
+		
+		UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Cache ready from disk: %d classes, %d symbols"), ClassCount, SymbolCount);
+		
+		TSharedPtr<FJsonObject> ReadyEventData = MakeShareable(new FJsonObject);
+		ReadyEventData->SetNumberField(TEXT("classCount"), ClassCount);
+		ReadyEventData->SetNumberField(TEXT("symbolCount"), SymbolCount);
+		UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Sending reflection.cacheReady event (loaded from disk)"));
+		IPCServer::Get().SendEvent(TEXT("reflection.cacheReady"), ReadyEventData);
+		return;
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] No cache on disk, building asynchronously"));
+	// If no cache on disk, build it asynchronously
+	BuildCacheAsync();
+}
+
+void ReflectionQueryManager::BuildCacheAsync()
+{
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] BuildCacheAsync called"));
+	
+	if (bCacheBuilding || bCacheReady)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Cache already building (%d) or ready (%d), skipping"), (int32)bCacheBuilding, (int32)bCacheReady);
+		return; // Already building or ready
+	}
+	
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Starting cache build..."));
+	bCacheBuilding = true;
+	
+	// Emit cache building event
+	TSharedPtr<FJsonObject> EventData = MakeShareable(new FJsonObject);
+	EventData->SetStringField(TEXT("message"), TEXT("Starting reflection cache build..."));
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Sending reflection.cacheBuilding event"));
+	IPCServer::Get().SendEvent(TEXT("reflection.cacheBuilding"), EventData);
+	
+	// Build cache on background thread pool
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this]()
+	{
+		// Marshal to Game Thread for UObject access
+		AsyncTask(ENamedThreads::GameThread, [this]()
+		{
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Starting BuildCache on Game Thread"));
+			BuildCache();
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] BuildCache completed"));
+			
+			bCacheReady = true;
+			bCacheBuilding = false;
+			
+			// Save to disk
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Saving cache to disk"));
+			SaveCacheToDisk();
+			
+			// Emit cache ready event
+			FScopeLock Lock(&CacheLock);
+			int32 ClassCount = ClassCache.Num();
+			int32 SymbolCount = SymbolCache.Num();
+			
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Cache ready: %d classes, %d symbols"), ClassCount, SymbolCount);
+			
+			TSharedPtr<FJsonObject> ReadyEventData = MakeShareable(new FJsonObject);
+			ReadyEventData->SetNumberField(TEXT("classCount"), ClassCount);
+			ReadyEventData->SetNumberField(TEXT("symbolCount"), SymbolCount);
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager] Sending reflection.cacheReady event"));
+			IPCServer::Get().SendEvent(TEXT("reflection.cacheReady"), ReadyEventData);
+		});
+	});
+}
+
+bool ReflectionQueryManager::WaitForCacheReady(float TimeoutSeconds)
+{
+	const FDateTime StartTime = FDateTime::Now();
+	
+	while (!bCacheReady && !bCacheBuilding)
+	{
+		// Cache not initialized, start building
+		BuildCacheAsync();
+	}
+	
+	while (!bCacheReady)
+	{
+		const FTimespan Elapsed = FDateTime::Now() - StartTime;
+		if (Elapsed.GetTotalSeconds() > TimeoutSeconds)
+		{
+			return false; // Timeout
+		}
+		
+		FPlatformProcess::Sleep(0.1f); // Sleep 100ms
+	}
+	
+	return true;
+}
+
+FString ReflectionQueryManager::GetCacheFilePath() const
+{
+	FString ProjectDir = FPaths::ProjectSavedDir();
+	FString CacheDir = FPaths::Combine(ProjectDir, TEXT("UnrealCursorBridge"));
+	
+	// Ensure directory exists
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	if (!PlatformFile.DirectoryExists(*CacheDir))
+	{
+		PlatformFile.CreateDirectoryTree(*CacheDir);
+	}
+	
+	return FPaths::Combine(CacheDir, TEXT("ReflectionCache.json"));
+}
+
+bool ReflectionQueryManager::LoadCacheFromDisk()
+{
+	FString CacheFilePath = GetCacheFilePath();
+	
+	if (!FPlatformFileManager::Get().GetPlatformFile().FileExists(*CacheFilePath))
+	{
+		return false; // No cache file
+	}
+	
+	FString JsonString;
+	if (!FFileHelper::LoadFileToString(JsonString, *CacheFilePath))
+	{
+		return false; // Failed to read
+	}
+	
+	TSharedPtr<FJsonObject> RootObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
+	
+	if (!FJsonSerializer::Deserialize(Reader, RootObject) || !RootObject.IsValid())
+	{
+		return false; // Failed to parse
+	}
+	
+	FScopeLock Lock(&CacheLock);
+	
+	// Load class cache
+	const TSharedPtr<FJsonObject>* ClassCacheObject = nullptr;
+	if (RootObject->TryGetObjectField(TEXT("classCache"), ClassCacheObject) && ClassCacheObject && ClassCacheObject->IsValid())
+	{
+		ClassCache.Empty();
+		for (const auto& Pair : ClassCacheObject->Get()->Values)
+		{
+			ClassCache.Add(Pair.Key, Pair.Value->AsObject());
+		}
+	}
+	
+	// Load symbol cache
+	const TSharedPtr<FJsonObject>* SymbolCacheObject = nullptr;
+	if (RootObject->TryGetObjectField(TEXT("symbolCache"), SymbolCacheObject) && SymbolCacheObject && SymbolCacheObject->IsValid())
+	{
+		SymbolCache.Empty();
+		for (const auto& Pair : SymbolCacheObject->Get()->Values)
+		{
+			SymbolCache.Add(Pair.Key, Pair.Value->AsObject());
+		}
+	}
+	
+	// Load class functions cache
+	const TSharedPtr<FJsonObject>* FunctionsCacheObject = nullptr;
+	if (RootObject->TryGetObjectField(TEXT("classFunctionsCache"), FunctionsCacheObject) && FunctionsCacheObject && FunctionsCacheObject->IsValid())
+	{
+		ClassFunctionsCache.Empty();
+		for (const auto& Pair : FunctionsCacheObject->Get()->Values)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* FunctionsArray = nullptr;
+			if (Pair.Value->TryGetArray(FunctionsArray))
+			{
+				TArray<TSharedPtr<FJsonObject>> Functions;
+				for (const auto& FuncValue : *FunctionsArray)
+				{
+					if (FuncValue->Type == EJson::Object)
+					{
+						Functions.Add(FuncValue->AsObject());
+					}
+				}
+				ClassFunctionsCache.Add(Pair.Key, Functions);
+			}
+		}
+	}
+	
+	// Load class properties cache
+	const TSharedPtr<FJsonObject>* PropertiesCacheObject = nullptr;
+	if (RootObject->TryGetObjectField(TEXT("classPropertiesCache"), PropertiesCacheObject) && PropertiesCacheObject && PropertiesCacheObject->IsValid())
+	{
+		ClassPropertiesCache.Empty();
+		for (const auto& Pair : PropertiesCacheObject->Get()->Values)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* PropertiesArray = nullptr;
+			if (Pair.Value->TryGetArray(PropertiesArray))
+			{
+				TArray<TSharedPtr<FJsonObject>> Properties;
+				for (const auto& PropValue : *PropertiesArray)
+				{
+					if (PropValue->Type == EJson::Object)
+					{
+						Properties.Add(PropValue->AsObject());
+					}
+				}
+				ClassPropertiesCache.Add(Pair.Key, Properties);
+			}
+		}
+	}
+	
+	return true;
+}
+
+void ReflectionQueryManager::SaveCacheToDisk()
+{
+	FScopeLock Lock(&CacheLock);
+	
+	TSharedPtr<FJsonObject> RootObject = MakeShareable(new FJsonObject);
+	
+	// Save class cache
+	TSharedPtr<FJsonObject> ClassCacheObject = MakeShareable(new FJsonObject);
+	for (const auto& Pair : ClassCache)
+	{
+		ClassCacheObject->SetObjectField(Pair.Key, Pair.Value);
+	}
+	RootObject->SetObjectField(TEXT("classCache"), ClassCacheObject);
+	
+	// Save symbol cache
+	TSharedPtr<FJsonObject> SymbolCacheObject = MakeShareable(new FJsonObject);
+	for (const auto& Pair : SymbolCache)
+	{
+		SymbolCacheObject->SetObjectField(Pair.Key, Pair.Value);
+	}
+	RootObject->SetObjectField(TEXT("symbolCache"), SymbolCacheObject);
+	
+	// Save class functions cache
+	TSharedPtr<FJsonObject> FunctionsCacheObject = MakeShareable(new FJsonObject);
+	for (const auto& Pair : ClassFunctionsCache)
+	{
+		TArray<TSharedPtr<FJsonValue>> FunctionsArray;
+		for (const auto& Func : Pair.Value)
+		{
+			FunctionsArray.Add(MakeShareable(new FJsonValueObject(Func)));
+		}
+		FunctionsCacheObject->SetArrayField(Pair.Key, FunctionsArray);
+	}
+	RootObject->SetObjectField(TEXT("classFunctionsCache"), FunctionsCacheObject);
+	
+	// Save class properties cache
+	TSharedPtr<FJsonObject> PropertiesCacheObject = MakeShareable(new FJsonObject);
+	for (const auto& Pair : ClassPropertiesCache)
+	{
+		TArray<TSharedPtr<FJsonValue>> PropertiesArray;
+		for (const auto& Prop : Pair.Value)
+		{
+			PropertiesArray.Add(MakeShareable(new FJsonValueObject(Prop)));
+		}
+		PropertiesCacheObject->SetArrayField(Pair.Key, PropertiesArray);
+	}
+	RootObject->SetObjectField(TEXT("classPropertiesCache"), PropertiesCacheObject);
+	
+	// Serialize to string
+	FString OutputString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
+	FJsonSerializer::Serialize(RootObject.ToSharedRef(), Writer);
+	
+	// Write to file
+	FString CacheFilePath = GetCacheFilePath();
+	FFileHelper::SaveStringToFile(OutputString, *CacheFilePath);
+}
+
+void ReflectionQueryManager::BuildCache()
+{
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager::BuildCache] Starting cache build"));
+	
+	// Clear existing caches
+	{
+		FScopeLock Lock(&CacheLock);
+		ClassCache.Empty();
+		SymbolCache.Empty();
+		ClassFunctionsCache.Empty();
+		ClassPropertiesCache.Empty();
+	}
+	
+	// Collect all classes first (no lock needed for iteration)
+	TArray<UClass*> AllClasses;
+	for (TObjectIterator<UClass> ClassIterator; ClassIterator; ++ClassIterator)
+	{
+		UClass* Class = *ClassIterator;
+		if (Class && !Class->HasAnyClassFlags(CLASS_Deprecated | CLASS_NewerVersionExists))
+		{
+			AllClasses.Add(Class);
+		}
+	}
+	
+	int32 TotalClasses = AllClasses.Num();
+	int32 ProcessedClasses = 0;
+	
+	UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager::BuildCache] Found %d classes to process"), TotalClasses);
+	
+	// Build cache for each class
+	for (UClass* Class : AllClasses)
+	{
+		// Build cache for this class (lock is handled inside BuildCacheForClass)
+		BuildCacheForClass(Class);
+		ProcessedClasses++;
+		
+		// Emit progress event every 10% or every 50 classes, whichever is more frequent
+		if (TotalClasses > 0 && (ProcessedClasses % FMath::Max(1, TotalClasses / 10) == 0 || ProcessedClasses % 50 == 0))
+		{
+			int32 Percent = (ProcessedClasses * 100) / TotalClasses;
+			
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager::BuildCache] Progress: %d%% (%d/%d classes)"), Percent, ProcessedClasses, TotalClasses);
+			
+			TSharedPtr<FJsonObject> ProgressEventData = MakeShareable(new FJsonObject);
+			ProgressEventData->SetNumberField(TEXT("percent"), Percent);
+			ProgressEventData->SetStringField(TEXT("message"), FString::Printf(TEXT("Processing classes (%d/%d)"), ProcessedClasses, TotalClasses));
+			UE_LOG(LogTemp, Log, TEXT("[ReflectionQueryManager::BuildCache] Sending reflection.cacheProgress event: %d%%"), Percent);
+			IPCServer::Get().SendEvent(TEXT("reflection.cacheProgress"), ProgressEventData);
+		}
+	}
+}
+
+void ReflectionQueryManager::BuildCacheForClass(UClass* Class)
+{
+	if (!Class)
+	{
+		return;
+	}
+	
+	FString ClassName = Class->GetName();
+	
+	FScopeLock Lock(&CacheLock);
+	
+	// Cache class data
+	TSharedPtr<FJsonObject> ClassJson = ClassToJson(Class);
+	if (ClassJson.IsValid())
+	{
+		ClassCache.Add(ClassName, ClassJson);
+		
+		// Add to symbol cache
+		TSharedPtr<FJsonObject> SymbolJson = MakeShareable(new FJsonObject(*ClassJson));
+		SymbolJson->SetStringField(TEXT("symbolType"), TEXT("class"));
+		SymbolCache.Add(ClassName, SymbolJson);
+	}
+	
+	// Cache functions
+	TArray<TSharedPtr<FJsonObject>> Functions;
+	for (TFieldIterator<UFunction> FuncIterator(Class, EFieldIteratorFlags::ExcludeSuper); FuncIterator; ++FuncIterator)
+	{
+		UFunction* Function = *FuncIterator;
+		if (Function)
+		{
+			TSharedPtr<FJsonObject> FuncJson = FunctionToJson(Function);
+			if (FuncJson.IsValid())
+			{
+				Functions.Add(FuncJson);
+				
+				// Add to symbol cache
+				FString FuncName = Function->GetName();
+				TSharedPtr<FJsonObject> SymbolJson = MakeShareable(new FJsonObject(*FuncJson));
+				SymbolJson->SetStringField(TEXT("symbolType"), TEXT("function"));
+				SymbolJson->SetStringField(TEXT("className"), ClassName);
+				SymbolCache.Add(FuncName, SymbolJson);
+			}
+		}
+	}
+	ClassFunctionsCache.Add(ClassName, Functions);
+	
+	// Cache properties
+	TArray<TSharedPtr<FJsonObject>> Properties;
+	for (TFieldIterator<FProperty> PropIterator(Class, EFieldIteratorFlags::ExcludeSuper); PropIterator; ++PropIterator)
+	{
+		FProperty* Property = *PropIterator;
+		if (Property)
+		{
+			TSharedPtr<FJsonObject> PropJson = PropertyToJson(Property);
+			if (PropJson.IsValid())
+			{
+				Properties.Add(PropJson);
+				
+				// Add to symbol cache
+				FString PropName = Property->GetName();
+				TSharedPtr<FJsonObject> SymbolJson = MakeShareable(new FJsonObject(*PropJson));
+				SymbolJson->SetStringField(TEXT("symbolType"), TEXT("property"));
+				SymbolJson->SetStringField(TEXT("className"), ClassName);
+				SymbolCache.Add(PropName, SymbolJson);
+			}
+		}
+	}
+	ClassPropertiesCache.Add(ClassName, Properties);
 }
 
 TArray<FString> ReflectionQueryManager::ListClasses()
@@ -67,8 +483,15 @@ TSharedPtr<FJsonObject> ReflectionQueryManager::GetClass(const FString& ClassNam
 
 TArray<TSharedPtr<FJsonObject>> ReflectionQueryManager::GetFunctions(const FString& ClassName)
 {
-	TArray<TSharedPtr<FJsonObject>> Functions;
+	FScopeLock Lock(&CacheLock);
 	
+	// Check cache first
+	if (ClassFunctionsCache.Contains(ClassName))
+	{
+		return ClassFunctionsCache[ClassName];
+	}
+	
+	// Fallback to building on demand
 	UClass* Class = FindObject<UClass>(nullptr, *ClassName);
 	if (!Class)
 	{
@@ -77,26 +500,31 @@ TArray<TSharedPtr<FJsonObject>> ReflectionQueryManager::GetFunctions(const FStri
 	
 	if (!Class)
 	{
-		return Functions;
+		return TArray<TSharedPtr<FJsonObject>>();
 	}
 	
-	// Iterate through all functions
-	for (TFieldIterator<UFunction> FuncIterator(Class, EFieldIteratorFlags::ExcludeSuper); FuncIterator; ++FuncIterator)
+	// Build and cache
+	BuildCacheForClass(Class);
+	
+	if (ClassFunctionsCache.Contains(ClassName))
 	{
-		UFunction* Function = *FuncIterator;
-		if (Function)
-		{
-			Functions.Add(FunctionToJson(Function));
-		}
+		return ClassFunctionsCache[ClassName];
 	}
 	
-	return Functions;
+	return TArray<TSharedPtr<FJsonObject>>();
 }
 
 TArray<TSharedPtr<FJsonObject>> ReflectionQueryManager::GetProperties(const FString& ClassName)
 {
-	TArray<TSharedPtr<FJsonObject>> Properties;
+	FScopeLock Lock(&CacheLock);
 	
+	// Check cache first
+	if (ClassPropertiesCache.Contains(ClassName))
+	{
+		return ClassPropertiesCache[ClassName];
+	}
+	
+	// Fallback to building on demand
 	UClass* Class = FindObject<UClass>(nullptr, *ClassName);
 	if (!Class)
 	{
@@ -105,67 +533,80 @@ TArray<TSharedPtr<FJsonObject>> ReflectionQueryManager::GetProperties(const FStr
 	
 	if (!Class)
 	{
-		return Properties;
+		return TArray<TSharedPtr<FJsonObject>>();
 	}
 	
-	// Iterate through all properties
-	for (TFieldIterator<FProperty> PropIterator(Class, EFieldIteratorFlags::ExcludeSuper); PropIterator; ++PropIterator)
+	// Build and cache
+	BuildCacheForClass(Class);
+	
+	if (ClassPropertiesCache.Contains(ClassName))
 	{
-		FProperty* Property = *PropIterator;
-		if (Property)
-		{
-			Properties.Add(PropertyToJson(Property));
-		}
+		return ClassPropertiesCache[ClassName];
 	}
 	
-	return Properties;
+	return TArray<TSharedPtr<FJsonObject>>();
 }
 
 TSharedPtr<FJsonObject> ReflectionQueryManager::FindSymbol(const FString& SymbolName)
 {
-	// First try as a class
-	TSharedPtr<FJsonObject> Result = GetClass(SymbolName);
-	if (Result.IsValid())
-	{
-		return Result;
-	}
+	bool bNeedsWait = false;
 	
-	// Then try to find as function or property in any class
-	for (TObjectIterator<UClass> ClassIterator; ClassIterator; ++ClassIterator)
+	// First check: Look in cache while holding lock
 	{
-		UClass* Class = *ClassIterator;
-		if (!Class)
+		FScopeLock Lock(&CacheLock);
+		
+		// OPTIMIZED: Use symbol cache for O(1) lookup instead of iterating
+		if (SymbolCache.Contains(SymbolName))
 		{
-			continue;
+			return SymbolCache[SymbolName];
 		}
 		
-		// Check functions
-		for (TFieldIterator<UFunction> FuncIterator(Class); FuncIterator; ++FuncIterator)
+		// If cache not ready, wait a bit and try again
+		if (!bCacheReady && !bCacheBuilding)
 		{
-			UFunction* Function = *FuncIterator;
-			if (Function && Function->GetName() == SymbolName)
-			{
-				TSharedPtr<FJsonObject> FuncJson = FunctionToJson(Function);
-				FuncJson->SetStringField(TEXT("symbolType"), TEXT("function"));
-				FuncJson->SetStringField(TEXT("className"), Class->GetName());
-				return FuncJson;
-			}
+			// Cache not initialized, start building
+			BuildCacheAsync();
+			// Return null for now, will be available after cache builds
+			return nullptr;
 		}
 		
-		// Check properties
-		for (TFieldIterator<FProperty> PropIterator(Class); PropIterator; ++PropIterator)
+		// If cache is building, we need to wait (but release lock first)
+		if (bCacheBuilding)
 		{
-			FProperty* Property = *PropIterator;
-			if (Property && Property->GetName() == SymbolName)
-			{
-				TSharedPtr<FJsonObject> PropJson = PropertyToJson(Property);
-				PropJson->SetStringField(TEXT("symbolType"), TEXT("property"));
-				PropJson->SetStringField(TEXT("className"), Class->GetName());
-				return PropJson;
-			}
+			bNeedsWait = true;
 		}
+	} // Lock released here
+	
+	// Wait for cache if needed (outside of lock to avoid blocking)
+	if (bNeedsWait)
+	{
+		WaitForCacheReady(5.0f); // Wait up to 5 seconds
 	}
 	
+	// Re-acquire lock for final checks and fallback
+	{
+		FScopeLock Lock(&CacheLock);
+		
+		// Try cache again (cache might be ready now)
+		if (SymbolCache.Contains(SymbolName))
+		{
+			return SymbolCache[SymbolName];
+		}
+		
+		// Fallback: Try as class (this uses ClassCache which is faster)
+		TSharedPtr<FJsonObject> Result = GetClass(SymbolName);
+		if (Result.IsValid())
+		{
+			// Add to symbol cache for future lookups
+			TSharedPtr<FJsonObject> SymbolJson = MakeShareable(new FJsonObject(*Result));
+			SymbolJson->SetStringField(TEXT("symbolType"), TEXT("class"));
+			SymbolCache.Add(SymbolName, SymbolJson);
+			return Result;
+		}
+	} // Lock released here
+	
+	// Not found in cache - return null
+	// Note: If symbol exists but cache isn't built yet, it will be found after cache completes
 	return nullptr;
 }
 

@@ -90,13 +90,13 @@ export class ConnectionManager {
         this.outputChannel.appendLine('Disconnected from Unreal Engine Editor');
     }
 
-    async sendRequest(method: string, params: Record<string, any>, cancelToken?: string): Promise<any> {
+    async sendRequest(method: string, params: Record<string, any>, cancelToken?: string, timeout?: number): Promise<any> {
         if (!this.client || !this.client.isConnected) {
             throw new Error('Not connected to Unreal Engine Editor');
         }
 
         try {
-            const response = await this.client.sendRequest(method, params, cancelToken);
+            const response = await this.client.sendRequest(method, params, cancelToken, timeout);
             
             if (response.error) {
                 throw new Error(`IPC Error [${response.error.code}]: ${response.error.message}`);
@@ -286,6 +286,43 @@ export class ConnectionManager {
 
         this.connectionState.projectInfo = projectInfo;
         this.outputChannel.appendLine(`Connected to project: ${projectInfo.projectName} (${projectInfo.engineVersion})`);
+        
+        // Query cache status on connection to get current state
+        this.queryCacheStatus();
+    }
+    
+    private async queryCacheStatus(): Promise<void> {
+        try {
+            this.outputChannel.appendLine('[DEBUG] Querying cache status after connection...');
+            console.log('[ConnectionManager] Querying cache status...');
+            const cacheStatus = await this.sendRequest('reflection.cacheStatus', {}, undefined, 5000);
+            this.outputChannel.appendLine(`[DEBUG] Cache status response: ${JSON.stringify(cacheStatus)}`);
+            console.log('[ConnectionManager] Cache status received:', cacheStatus);
+            
+            if (cacheStatus) {
+                if (cacheStatus.ready) {
+                    this.connectionState.cacheReady = true;
+                    this.connectionState.cacheBuilding = false;
+                    this.connectionState.cacheProgress = 100;
+                    this.outputChannel.appendLine('[Reflection Cache] Cache is ready');
+                    console.log('[ConnectionManager] Cache is ready');
+                } else {
+                    this.connectionState.cacheReady = false;
+                    // Don't set cacheBuilding to false here - it might already be building
+                    // The building event will set it to true when cache starts building
+                    this.outputChannel.appendLine('[Reflection Cache] Cache is not ready yet - waiting for build events...');
+                    console.log('[ConnectionManager] Cache is not ready yet');
+                    
+                    // If cache is not ready and not building, it might need to be triggered
+                    // But we'll wait for events from the plugin rather than triggering manually
+                }
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            this.outputChannel.appendLine(`[DEBUG] Failed to query cache status: ${errorMessage}`);
+            console.error('[ConnectionManager] Failed to query cache status:', error);
+            // Don't throw - cache status query is optional
+        }
     }
 
     private setupEventHandlers(): void {
@@ -325,6 +362,43 @@ export class ConnectionManager {
         // Profiling events
         this.client.onEvent('profiling.metrics', (data) => {
             // Metrics will be handled by profiling view
+        });
+
+        // Cache events
+        this.client.onEvent('reflection.cacheBuilding', (_event, data: { message?: string }) => {
+            console.log('[ConnectionManager] Received reflection.cacheBuilding event:', data);
+            this.outputChannel.appendLine(`[DEBUG] [Reflection Cache] Received cacheBuilding event: ${JSON.stringify(data)}`);
+            this.connectionState.cacheBuilding = true;
+            this.connectionState.cacheReady = false;
+            const message = data.message || 'Starting cache build...';
+            this.connectionState.cacheProgressMessage = message;
+            this.outputChannel.appendLine(`[Reflection Cache] Building: ${message}`);
+        });
+
+        this.client.onEvent('reflection.cacheProgress', (_event, data: { percent: number; message?: string }) => {
+            console.log('[ConnectionManager] Received reflection.cacheProgress event:', data);
+            this.outputChannel.appendLine(`[DEBUG] [Reflection Cache] Received cacheProgress event: ${JSON.stringify(data)}`);
+            this.connectionState.cacheBuilding = true;
+            this.connectionState.cacheProgress = data.percent;
+            if (data.message) {
+                this.connectionState.cacheProgressMessage = data.message;
+            }
+            this.outputChannel.appendLine(`[Reflection Cache] Progress: ${data.percent}%${data.message ? ` - ${data.message}` : ''}`);
+        });
+
+        this.client.onEvent('reflection.cacheReady', (_event, data: { classCount?: number; symbolCount?: number }) => {
+            console.log('[ConnectionManager] Received reflection.cacheReady event:', data);
+            this.outputChannel.appendLine(`[DEBUG] [Reflection Cache] Received cacheReady event: ${JSON.stringify(data)}`);
+            this.connectionState.cacheBuilding = false;
+            this.connectionState.cacheReady = true;
+            this.connectionState.cacheProgress = 100;
+            this.connectionState.cacheProgressMessage = '';
+            
+            const classInfo = data.classCount !== undefined ? `${data.classCount} classes` : '';
+            const symbolInfo = data.symbolCount !== undefined ? `${data.symbolCount} symbols` : '';
+            const info = [classInfo, symbolInfo].filter(s => s).join(', ');
+            
+            this.outputChannel.appendLine(`[Reflection Cache] ✓ Ready${info ? ` (${info})` : ''}`);
         });
     }
 }

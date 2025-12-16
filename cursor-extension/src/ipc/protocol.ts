@@ -65,6 +65,7 @@ export type Method =
     | 'reflection.getFunctions'
     | 'reflection.getProperties'
     | 'reflection.findSymbol'
+    | 'reflection.cacheStatus'
     | 'reflection.getCDODefaults'
     | 'reflection.getUsageData'
     | 'unreal.reflection.exportJson'
@@ -95,7 +96,10 @@ export type EventType =
     | 'profiling.metrics'
     | 'profiling.traceReady'
     | 'intellisense.compileCommandsGenerated'
-    | 'uht.diagnostic';
+    | 'uht.diagnostic'
+    | 'reflection.cacheBuilding'
+    | 'reflection.cacheProgress'
+    | 'reflection.cacheReady';
 
 // Client hello request
 export interface ClientHelloRequest {

@@ -13,6 +13,7 @@ import * as intellisenseCommands from './commands/intellisense';
 import * as testConnectionCommands from './commands/testConnection';
 import * as debugCommands from './commands/debug';
 import * as pathsCommands from './commands/paths';
+import * as planningCommands from './commands/planning';
 import { BuildViewProvider } from './ui/webviews/buildView';
 import { ToolbarViewProvider } from './ui/webviews/toolbarView';
 import { detectUnrealProject, hasUnrealProject } from './utils/projectDetector';
@@ -23,6 +24,7 @@ import { UnrealDiagnosticsProvider } from './providers/unrealDiagnosticsProvider
 import { UnrealCompletionProvider } from './providers/unrealCompletionProvider';
 import { UnrealCodeLensProvider } from './providers/unrealCodeLensProvider';
 import { UnrealInlayHintsProvider } from './providers/unrealInlayHintsProvider';
+import { UnrealCodeActionProvider } from './providers/unrealCodeActionProvider';
 
 let connectionManager: ConnectionManager | undefined;
 let treeDataProvider: UnrealTreeDataProvider | undefined;
@@ -332,27 +334,42 @@ function registerCommands(
         
         // Register IntelliSense providers
         try {
-            // Hover provider
+            // Hover provider - register for C++ files (.cpp, .h, .hpp)
             const hoverProvider = new UnrealHoverProvider(connectionManager, connectionState);
             context.subscriptions.push(
-                vscode.languages.registerHoverProvider('cpp', hoverProvider)
+                vscode.languages.registerHoverProvider(
+                    { scheme: 'file', language: 'cpp' },
+                    hoverProvider
+                )
             );
             
             // Diagnostics provider
             const diagnosticsProvider = new UnrealDiagnosticsProvider(connectionManager, connectionState);
             context.subscriptions.push(diagnosticsProvider);
             
-            // Watch for document changes to update diagnostics
+            // Watch for document changes to update diagnostics (debounced)
             context.subscriptions.push(
                 vscode.workspace.onDidChangeTextDocument((e) => {
-                    diagnosticsProvider.validateDocument(e.document);
+                    // Only validate if it's a C++ file and connected
+                    if (e.document.languageId === 'cpp' && connectionState.connected) {
+                        diagnosticsProvider.validateDocument(e.document, true); // Debounced
+                    }
+                })
+            );
+
+            // Watch for document saves to validate immediately
+            context.subscriptions.push(
+                vscode.workspace.onDidSaveTextDocument((doc) => {
+                    if (doc.languageId === 'cpp' && connectionState.connected) {
+                        diagnosticsProvider.validateDocument(doc, false); // Immediate
+                    }
                 })
             );
             
-            // Validate all open documents on activation
+            // Validate all open documents on activation (immediate)
             vscode.workspace.textDocuments.forEach((doc) => {
-                if (doc.languageId === 'cpp') {
-                    diagnosticsProvider.validateDocument(doc);
+                if (doc.languageId === 'cpp' && connectionState.connected) {
+                    diagnosticsProvider.validateDocument(doc, false); // Immediate
                 }
             });
             
@@ -366,6 +383,18 @@ function registerCommands(
             const codeLensProvider = new UnrealCodeLensProvider(connectionManager, connectionState);
             context.subscriptions.push(
                 vscode.languages.registerCodeLensProvider('cpp', codeLensProvider)
+            );
+
+            // Code Action provider (Quick Fixes)
+            const codeActionProvider = new UnrealCodeActionProvider(connectionManager, connectionState);
+            context.subscriptions.push(
+                vscode.languages.registerCodeActionsProvider(
+                    { scheme: 'file', language: 'cpp' },
+                    codeActionProvider,
+                    {
+                        providedCodeActionKinds: [vscode.CodeActionKind.QuickFix]
+                    }
+                )
             );
             
             // Inlay hints provider
@@ -396,6 +425,13 @@ function registerCommands(
             pathsCommands.register(context, connectionManager, connectionState);
         } catch (error) {
             console.error('Failed to register path configuration commands:', error);
+        }
+        
+        // Planning commands
+        try {
+            planningCommands.register(context, connectionManager, connectionState);
+        } catch (error) {
+            console.error('Failed to register planning commands:', error);
         }
         
         // Settings command

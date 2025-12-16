@@ -13,26 +13,49 @@ export class UnrealHoverProvider implements vscode.HoverProvider {
         position: vscode.Position,
         token: vscode.CancellationToken
     ): Promise<vscode.Hover | null> {
+        // Only work with C++ files
+        const fileName = document.fileName.toLowerCase();
+        if (!fileName.endsWith('.cpp') && !fileName.endsWith('.h') && !fileName.endsWith('.hpp') && !fileName.endsWith('.cxx')) {
+            return null;
+        }
+
         if (!this.connectionState.connected) {
+            // Return null silently - user might not be connected yet
             return null;
         }
 
         // Get the word at the cursor position
-        const wordRange = document.getWordRangeAtPosition(position);
+        const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_][a-zA-Z0-9_]*/);
         if (!wordRange) {
             return null;
         }
 
         const symbolName = document.getText(wordRange);
-        if (!symbolName) {
+        if (!symbolName || symbolName.length < 2) {
+            return null; // Skip very short symbols
+        }
+
+        // Skip common keywords and types
+        const skipSymbols = ['if', 'for', 'while', 'return', 'void', 'int', 'float', 'bool', 'char', 'const', 'static', 'virtual', 'public', 'private', 'protected'];
+        if (skipSymbols.includes(symbolName.toLowerCase())) {
             return null;
         }
 
         try {
-            // Try to find the symbol in reflection
+            // Check if reflection cache is ready (optional, won't block if not available)
+            try {
+                const cacheStatus = await this.connectionManager.sendRequest('reflection.cacheStatus', {}, undefined, 2000);
+                if (cacheStatus && !cacheStatus.ready) {
+                    // Cache not ready yet, but continue anyway (will be slower)
+                }
+            } catch {
+                // Cache status check failed, continue anyway
+            }
+
+            // Try to find the symbol in reflection (with longer timeout for first query)
             const symbolResult = await this.connectionManager.sendRequest('reflection.findSymbol', {
                 symbolName: symbolName
-            });
+            }, undefined, 60000); // 60 second timeout for reflection queries
 
             if (!symbolResult) {
                 return null;
@@ -153,7 +176,33 @@ export class UnrealHoverProvider implements vscode.HoverProvider {
 
             return new vscode.Hover(contents, wordRange);
         } catch (error) {
-            // Silently fail - don't show hover if reflection query fails
+            // Check if we should show error notifications
+            const config = vscode.workspace.getConfiguration('unreal');
+            const showErrors = config.get<boolean>('hover.showErrors', false);
+
+            // Log error for debugging but don't show hover
+            // This prevents hover from working if there's a connection issue
+            if (error instanceof Error && error.message.includes('NOT_FOUND')) {
+                // Symbol not found - this is expected for many symbols, don't log
+                return null;
+            }
+
+            // For other errors, log and optionally show notification
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+            console.debug(`Hover provider error for symbol '${symbolName}':`, error);
+            
+            if (showErrors) {
+                // Only show notification if user has enabled it
+                vscode.window.showWarningMessage(
+                    `Hover failed for '${symbolName}': ${errorMessage}`,
+                    'Test Hover'
+                ).then(choice => {
+                    if (choice === 'Test Hover') {
+                        vscode.commands.executeCommand('unreal.testHover');
+                    }
+                });
+            }
+            
             return null;
         }
     }

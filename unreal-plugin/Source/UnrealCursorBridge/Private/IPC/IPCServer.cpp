@@ -368,18 +368,23 @@ void IPCServer::SendEvent(const FString& EventName, const TSharedPtr<FJsonObject
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
 	FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	
-	// Don't log events to prevent infinite recursion with log capture
-	// UE_LOG(LogTemp, Log, TEXT("Sending event: %s"), *OutputString);
-	
 	// Broadcast event to all connected clients
 	FTCHARToUTF8 UTF8String(*OutputString);
 	FScopeLock Lock(&ClientsLock);
+	int32 ClientsSent = 0;
 	for (INetworkingWebSocket* Client : ConnectedClients)
 	{
 		if (Client)
 		{
 			Client->Send((uint8*)UTF8String.Get(), UTF8String.Length(), false);
+			ClientsSent++;
 		}
+	}
+	
+	// Log cache events for debugging (but not all events to prevent log spam)
+	if (EventName.StartsWith(TEXT("reflection.cache")))
+	{
+		UE_LOG(LogTemp, Log, TEXT("[IPCServer] Event %s sent to %d/%d clients"), *EventName, ClientsSent, ConnectedClients.Num());
 	}
 }
 

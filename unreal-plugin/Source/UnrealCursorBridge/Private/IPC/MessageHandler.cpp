@@ -892,6 +892,9 @@ void MessageHandler::RegisterHandlers()
 			return;
 		}
 		
+		// Don't wait for cache - just try to find the symbol
+		// If cache is not ready, FindSymbol will return null, which is fine
+		// The client can retry later when cache is ready
 		TSharedPtr<FJsonObject> SymbolJson = ReflectionQueryManager::Get().FindSymbol(SymbolName);
 		if (!SymbolJson.IsValid())
 		{
@@ -900,6 +903,22 @@ void MessageHandler::RegisterHandlers()
 		}
 		
 		IPCServer::Get().SendResponse(Request.Id, SymbolJson, nullptr);
+	}));
+	
+	// Add cache status check method
+	Server.RegisterHandler(TEXT("reflection.cacheStatus"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[MessageHandler] reflection.cacheStatus request received"));
+		ReflectionQueryManager& Manager = ReflectionQueryManager::Get();
+		bool bReady = Manager.IsCacheReady();
+		UE_LOG(LogTemp, Log, TEXT("[MessageHandler] Cache status - Ready: %d"), bReady);
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("ready"), bReady);
+		// Note: IsCacheBuilding() doesn't exist, but we can infer it from !IsCacheReady()
+		// The cache is building if it's not ready yet
+		UE_LOG(LogTemp, Log, TEXT("[MessageHandler] Sending cache status response: ready=%d"), bReady);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
 	}));
 	
 	Server.RegisterHandler(TEXT("reflection.getCDODefaults"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
@@ -968,6 +987,56 @@ void MessageHandler::RegisterHandlers()
 		}
 		Result->SetArrayField(TEXT("overriddenInBlueprints"), OverriddenInArray);
 		
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	// Planning validation methods
+	// Note: Most validation logic is handled in the TypeScript extension
+	// These methods provide additional server-side validation if needed
+	
+	Server.RegisterHandler(TEXT("planning.validate"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// This is a placeholder - actual validation is done in TypeScript
+		// Can be extended to perform server-side validation checks
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("valid"), true);
+		Result->SetStringField(TEXT("message"), TEXT("Planning validation is primarily handled client-side"));
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("planning.validateReflection"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// Reflection validation uses existing reflection methods
+		// This is a placeholder for any server-side reflection validation logic
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("valid"), true);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("planning.validateIntelliSense"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// IntelliSense validation uses existing UHT check methods
+		// This is a placeholder for any server-side IntelliSense validation logic
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("valid"), true);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("planning.validateAPI"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// API validation uses existing reflection methods
+		// This is a placeholder for any server-side API validation logic
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("valid"), true);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("planning.validateDesign"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// Design validation is primarily client-side static analysis
+		// This is a placeholder for any server-side design validation logic
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("valid"), true);
 		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
 	}));
 }

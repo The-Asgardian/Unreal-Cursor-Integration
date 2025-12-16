@@ -26,6 +26,10 @@ export class ConnectionState {
     private _pieRunning: boolean = false;
     private _piePaused: boolean = false;
     private _profilingActive: boolean = false;
+    private _cacheBuilding: boolean = false;
+    private _cacheReady: boolean = false;
+    private _cacheProgress: number = 0;
+    private _cacheProgressMessage: string = '';
     
     private _onStateChangedEmitter = new vscode.EventEmitter<void>();
     public readonly onStateChanged = this._onStateChangedEmitter.event;
@@ -144,6 +148,50 @@ export class ConnectionState {
     
     get capabilities(): Capabilities | undefined {
         return this._projectInfo?.capabilities;
+    }
+    
+    get cacheBuilding(): boolean {
+        return this._cacheBuilding;
+    }
+    
+    set cacheBuilding(value: boolean) {
+        if (this._cacheBuilding !== value) {
+            this._cacheBuilding = value;
+            this._onStateChangedEmitter.fire();
+        }
+    }
+    
+    get cacheReady(): boolean {
+        return this._cacheReady;
+    }
+    
+    set cacheReady(value: boolean) {
+        if (this._cacheReady !== value) {
+            this._cacheReady = value;
+            this._onStateChangedEmitter.fire();
+        }
+    }
+    
+    get cacheProgress(): number {
+        return this._cacheProgress;
+    }
+    
+    set cacheProgress(value: number) {
+        if (this._cacheProgress !== value) {
+            this._cacheProgress = value;
+            this._onStateChangedEmitter.fire();
+        }
+    }
+    
+    get cacheProgressMessage(): string {
+        return this._cacheProgressMessage;
+    }
+    
+    set cacheProgressMessage(value: string) {
+        if (this._cacheProgressMessage !== value) {
+            this._cacheProgressMessage = value;
+            this._onStateChangedEmitter.fire();
+        }
     }
 }
 

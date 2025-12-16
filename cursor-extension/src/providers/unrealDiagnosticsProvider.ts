@@ -6,6 +6,8 @@ export class UnrealDiagnosticsProvider {
     private diagnosticCollection: vscode.DiagnosticCollection;
     private connectionManager: ConnectionManager;
     private connectionState: ConnectionState;
+    private validationTimeouts: Map<string, NodeJS.Timeout> = new Map();
+    private readonly VALIDATION_DEBOUNCE_MS = 1000; // Wait 1 second after typing stops
 
     constructor(
         connectionManager: ConnectionManager,
@@ -16,11 +18,37 @@ export class UnrealDiagnosticsProvider {
         this.diagnosticCollection = vscode.languages.createDiagnosticCollection('unreal-intellisense');
     }
 
-    async validateDocument(document: vscode.TextDocument): Promise<void> {
+    async validateDocument(document: vscode.TextDocument, debounce: boolean = true): Promise<void> {
         if (!this.connectionState.connected || document.languageId !== 'cpp') {
             this.diagnosticCollection.delete(document.uri);
             return;
         }
+
+        // Debounce validation to avoid excessive requests while typing
+        if (debounce) {
+            const uri = document.uri.toString();
+            
+            // Clear existing timeout for this document
+            const existingTimeout = this.validationTimeouts.get(uri);
+            if (existingTimeout) {
+                clearTimeout(existingTimeout);
+            }
+
+            // Set new timeout
+            const timeout = setTimeout(() => {
+                this.validationTimeouts.delete(uri);
+                this.performValidation(document);
+            }, this.VALIDATION_DEBOUNCE_MS);
+
+            this.validationTimeouts.set(uri, timeout);
+            return;
+        }
+
+        // Perform validation immediately
+        await this.performValidation(document);
+    }
+
+    private async performValidation(document: vscode.TextDocument): Promise<void> {
 
         const diagnostics: vscode.Diagnostic[] = [];
 
@@ -143,6 +171,11 @@ export class UnrealDiagnosticsProvider {
     }
 
     dispose(): void {
+        // Clear all pending timeouts
+        for (const timeout of this.validationTimeouts.values()) {
+            clearTimeout(timeout);
+        }
+        this.validationTimeouts.clear();
         this.diagnosticCollection.dispose();
     }
 }

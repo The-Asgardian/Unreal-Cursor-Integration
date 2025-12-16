@@ -5,6 +5,7 @@
 #include "IPC/MessageHandler.h"
 #include "Logs/LogCaptureDevice.h"
 #include "LiveCoding/LiveCodingManager.h"
+#include "Reflection/ReflectionQueryManager.h"
 #include "Modules/ModuleManager.h"
 #include "ISettingsModule.h"
 #include "ISettingsSection.h"
@@ -16,6 +17,10 @@ void FUnrealCursorBridgeModule::StartupModule()
 {
 	// Initialize log capture device (singleton)
 	FLogCaptureDevice::Get();
+	
+	// Initialize reflection cache system (loads from disk or builds asynchronously)
+	UE_LOG(LogTemp, Log, TEXT("[UnrealCursorBridge] Initializing reflection cache system"));
+	ReflectionQueryManager::Get().InitializeCache();
 	
 	// Register message handlers
 	MessageHandler::RegisterHandlers();
