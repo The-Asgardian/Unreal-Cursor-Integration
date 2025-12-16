@@ -85,6 +85,11 @@
         "icon": "$(code)"
       },
       {
+        "command": "unreal.intellisense.runUHTCheck",
+        "title": "Run UHT Check",
+        "icon": "$(check)"
+      },
+      {
         "command": "unreal.liveCoding.compile",
         "title": "Compile (Live Coding)",
         "icon": "$(sync)"
@@ -313,6 +318,11 @@
           ],
           "default": "info",
           "description": "Logging level for extension output"
+        },
+        "unreal.intellisense.autoRegenerate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically regenerate compile_commands.json when C++ files are added or modified"
         }
       }
     }

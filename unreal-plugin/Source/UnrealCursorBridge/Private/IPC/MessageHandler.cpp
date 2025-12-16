@@ -6,6 +6,7 @@
 #include "LiveCoding/LiveCodingManager.h"
 #include "Run/RunManager.h"
 #include "Logs/LogCaptureDevice.h"
+#include "Intellisense/IntellisenseGenerator.h"
 #include "UHT/UHTMetadataExtractor.h"
 #include "UHT/UHTMetadataCache.h"
 #include "Reflection/ReflectionQueryManager.h"
@@ -346,6 +347,91 @@ void MessageHandler::RegisterHandlers()
 		{
 			Result->SetStringField(TEXT("error"), TEXT("Failed to generate project files"));
 		}
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	// IntelliSense commands
+	Server.RegisterHandler(TEXT("intellisense.generateCompileCommands"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		FString Target = TEXT("Editor");
+		FString Platform = TEXT("Win64");
+		FString Configuration = TEXT("Development");
+		
+		if (Request.Params.IsValid())
+		{
+			Request.Params->TryGetStringField(TEXT("target"), Target);
+			Request.Params->TryGetStringField(TEXT("platform"), Platform);
+			Request.Params->TryGetStringField(TEXT("configuration"), Configuration);
+		}
+		
+		// Check if generation is already in progress
+		if (IntellisenseGenerator::Get().IsGenerationInProgress())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("GENERATION_IN_PROGRESS"), TEXT("IntelliSense generation already in progress"), nullptr);
+			return;
+		}
+		
+		// Start generation (runs on background thread)
+		FString JobId = IntellisenseGenerator::Get().GenerateCompileCommands(Target, Platform, Configuration);
+		
+		if (JobId.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("GENERATION_FAILED"), TEXT("Failed to start IntelliSense generation"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetStringField(TEXT("jobId"), JobId);
+		Result->SetStringField(TEXT("target"), Target);
+		Result->SetStringField(TEXT("platform"), Platform);
+		Result->SetStringField(TEXT("configuration"), Configuration);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("intellisense.cancelGeneration"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		if (!Request.Params.IsValid())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Missing params"), nullptr);
+			return;
+		}
+		
+		FString JobId;
+		Request.Params->TryGetStringField(TEXT("jobId"), JobId);
+		
+		if (JobId.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("INVALID_PARAMS"), TEXT("Job ID required"), nullptr);
+			return;
+		}
+		
+		IntellisenseGenerator::Get().CancelGeneration(JobId);
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetBoolField(TEXT("cancelled"), true);
+		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
+	}));
+	
+	Server.RegisterHandler(TEXT("intellisense.runUHTCheck"), FIPCRequestHandler::CreateLambda([](const FIPCRequestMessage& Request)
+	{
+		// Check if generation is already in progress
+		if (IntellisenseGenerator::Get().IsGenerationInProgress())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("GENERATION_IN_PROGRESS"), TEXT("IntelliSense generation already in progress"), nullptr);
+			return;
+		}
+		
+		// Start UHT check (runs on background thread)
+		FString JobId = IntellisenseGenerator::Get().RunUHTCheck();
+		
+		if (JobId.IsEmpty())
+		{
+			IPCServer::Get().SendError(Request.Id, TEXT("UHT_CHECK_FAILED"), TEXT("Failed to start UHT check"), nullptr);
+			return;
+		}
+		
+		TSharedPtr<FJsonObject> Result = MakeShareable(new FJsonObject);
+		Result->SetStringField(TEXT("jobId"), JobId);
 		IPCServer::Get().SendResponse(Request.Id, Result, nullptr);
 	}));
 	

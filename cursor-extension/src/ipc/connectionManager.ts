@@ -115,7 +115,7 @@ export class ConnectionManager {
         }
     }
 
-    offEvent(event: string, handler: (data: any) => void): void {
+    offEvent(event: string, handler: (event: string, data: any) => void): void {
         if (this.client) {
             this.client.offEvent(event, handler);
         }
